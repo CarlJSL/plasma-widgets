@@ -31,19 +31,52 @@ Prioridad cuando hay varios: draft → observado vigente → conflictos → CI f
 - `python3`
 - `notify-send` (libnotify) para las notificaciones
 
-## Instalación
+## Instalación paso a paso
 
-```sh
-./install.sh
-```
+1. **Instala las dependencias** (ejemplo en Arch/CachyOS; en otras distros usa su gestor):
+   ```sh
+   sudo pacman -S github-cli python libnotify
+   ```
+2. **Autentica `gh`** con la cuenta cuyos PRs quieres ver:
+   ```sh
+   gh auth login
+   gh auth status   # verifica que la cuenta activa es la correcta
+   ```
+3. **Clona el repo:**
+   ```sh
+   git clone https://github.com/CarlJSL/pr-tracker.git
+   cd pr-tracker
+   ```
+4. **Prueba el script** antes de instalar el widget; debe imprimir tus PRs en JSON:
+   ```sh
+   python3 bin/my-prs.py | python3 -m json.tool
+   ```
+   Si `error` no es `null`, revisa el paso 2.
+5. **Instala:**
+   ```sh
+   ./install.sh
+   ```
+   Copia el script a `~/.local/bin/my-prs` e instala el widget en `~/.local/share/plasma/plasmoids/`.
+6. **Recarga Plasma** para que detecte el widget:
+   ```sh
+   kquitapp6 plasmashell && kstart plasmashell
+   ```
+7. **Añádelo al panel:** clic derecho en el panel → **Añadir widgets** → busca **Mis PRs** → arrástralo a la barra.
 
-Copia el script a `~/.local/bin/my-prs` e instala el widget. Luego: clic derecho en el panel → **Añadir widgets** → **Mis PRs**. Si no aparece, reinicia Plasma:
+### Actualizar o desinstalar
 
-```sh
-kquitapp6 plasmashell && kstart plasmashell
-```
+- Después de un `git pull` o de editar el código: `./install.sh` y reinicia Plasma (paso 6).
+- Desinstalar: `kpackagetool6 -t Plasma/Applet -r io.personal.prtracker && rm ~/.local/bin/my-prs`.
 
-Tras cualquier cambio al código, corre `./install.sh` y reinicia Plasma.
+### Problemas comunes
+
+| Síntoma | Causa y solución |
+|---|---|
+| El widget no aparece en la lista | Reinicia Plasma (paso 6). |
+| Dice «Sin PRs abiertos» y tienes PRs | `gh` está logueado con otra cuenta: `gh auth switch`. |
+| Muestra un error en rojo | Corre el paso 4 en la terminal para ver el mensaje real. |
+| No llegan notificaciones | Falta `libnotify` (`notify-send`). |
+| Cambié el QML y no se ve | Plasma cachea el QML: `./install.sh` y reinicia Plasma. |
 
 ## Cómo funciona
 
