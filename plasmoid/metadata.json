@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "io.personal.prtracker",
+    "Name": "Mis PRs",
+    "Description": "PRs abiertos propios con su estado (observado, aprobado, CI...)",
+    "Icon": "vcs-pull-request",
+    "Authors": [{ "Name": "CarlJSL" }],
+    "Category": "Development",
+    "License": "MIT",
+    "Version": "1.0"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}
