@@ -10,6 +10,7 @@ PlasmoidItem {
     id: root
 
     property var prs: []
+    property int accountCount: 1
     property string errorMsg: ""
     property bool loading: false
     readonly property string cmd: "python3 $HOME/.local/bin/my-prs"
@@ -38,7 +39,7 @@ PlasmoidItem {
     function notifyChanges(list) {
         const next = {}
         for (const p of list) {
-            const k = p.repo + "#" + p.number
+            const k = p.owner + "#" + p.number
             next[k] = p.status
             if (initialized && prevStatus[k] !== p.status && notifyOn[p.status]) {
                 const urgency = p.status === "aprobado" ? "normal" : "critical"
@@ -67,6 +68,7 @@ PlasmoidItem {
             try {
                 const r = JSON.parse(data["stdout"])
                 root.prs = r.prs
+                root.accountCount = r.accounts ? r.accounts.length : 1
                 if (!r.error) root.notifyChanges(r.prs)
                 root.errorMsg = r.error ? r.error : ""
             } catch (e) { root.errorMsg = data["stderr"] || String(e) }
@@ -144,7 +146,7 @@ PlasmoidItem {
                             Layout.fillWidth: true; spacing: 0
                             PlasmaComponents.Label { text: "#" + modelData.number + "  " + modelData.title; elide: Text.ElideRight; Layout.fillWidth: true }
                             PlasmaComponents.Label {
-                                text: modelData.label + "  ·  " + modelData.branch + " → " + modelData.base
+                                text: modelData.label + "  ·  " + modelData.branch + " → " + modelData.base + (root.accountCount > 1 ? "  ·  @" + modelData.account : "")
                                 color: root.colors[modelData.status]; font: Kirigami.Theme.smallFont; elide: Text.ElideRight; Layout.fillWidth: true
                             }
                         }

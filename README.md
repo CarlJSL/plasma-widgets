@@ -6,6 +6,7 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 
 - Ícono de GitHub en el panel con un contador de PRs abiertos (rojo si alguno requiere atención, azul si no).
 - Al hacer clic se abre la lista, agrupada por repo, con `#número título` y `rama → base`. Clic en una fila abre el PR en el navegador.
+- Muestra los PRs de **todas** las cuentas logueadas en `gh` (no solo la activa); si hay más de una, cada fila indica `@cuenta`.
 - Se actualiza solo cada 2,5 minutos; hay botón para forzar la consulta.
 - Notificación de escritorio cuando un PR **cambia** a observado, con conflictos, CI fallando o aprobado (no avisa en la primera carga ni repite).
 - Ordenado por fecha de creación, más reciente primero, agrupado por repo.
@@ -37,7 +38,7 @@ Prioridad cuando hay varios: draft → observado vigente → conflictos → CI f
    ```sh
    sudo pacman -S github-cli python libnotify
    ```
-2. **Autentica `gh`** con la cuenta cuyos PRs quieres ver:
+2. **Autentica `gh`** con las cuentas cuyos PRs quieres ver (repite `gh auth login` por cada una):
    ```sh
    gh auth login
    gh auth status   # verifica que la cuenta activa es la correcta
@@ -73,14 +74,14 @@ Prioridad cuando hay varios: draft → observado vigente → conflictos → CI f
 | Síntoma | Causa y solución |
 |---|---|
 | El widget no aparece en la lista | Reinicia Plasma (paso 6). |
-| Dice «Sin PRs abiertos» y tienes PRs | `gh` está logueado con otra cuenta: `gh auth switch`. |
+| Dice «Sin PRs abiertos» y tienes PRs | La cuenta con los PRs no está en `gh`: `gh auth login` con esa cuenta (`gh auth status` lista las logueadas). |
 | Muestra un error en rojo | Corre el paso 4 en la terminal para ver el mensaje real. |
 | No llegan notificaciones | Falta `libnotify` (`notify-send`). |
 | Cambié el QML y no se ve | Plasma cachea el QML: `./install.sh` y reinicia Plasma. |
 
 ## Cómo funciona
 
-- `bin/my-prs.py` hace **una** consulta GraphQL con `gh api graphql` (`is:pr is:open author:@me`) y devuelve JSON con estado de review, CI y mergeabilidad. Se puede usar solo desde la terminal: `my-prs | jq`.
+- `bin/my-prs.py` lista las cuentas de `gh` y, por cada una, hace **una** consulta GraphQL con `gh api graphql` usando su token (`is:pr is:open author:@me`) y devuelve JSON con estado de review, CI y mergeabilidad. Se puede usar solo desde la terminal: `my-prs | jq`.
 - `plasmoid/` es el widget QML. Ejecuta el script con el motor `executable` de Plasma5Support y pinta el resultado.
 - Un PR cuenta como «Observado» solo si el review de cambios solicitados es sobre el commit actual (`headRefOid`); si subiste commits después, pasa a re-review.
 
