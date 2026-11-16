@@ -19,11 +19,12 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 | Esperando review | Sin decisión todavía |
 | Esperando re-review | Te observaron, pero subiste commits después de la observación |
 | Observado | Cambios solicitados sobre el último commit |
+| CI en curso | Los checks/tests del último commit siguen corriendo (azul). Tiene prioridad sobre «Aprobado» y «Esperando review» |
 | Aprobado | Aprobado por los revisores |
 | Conflictos | No se puede mergear por conflictos |
 | CI fallando | Los checks del último commit fallan |
 
-Prioridad cuando hay varios: draft → observado vigente → conflictos → CI fallando → aprobado → esperando review.
+Prioridad cuando hay varios: draft → observado vigente → conflictos → CI fallando → CI en curso → esperando re-review → aprobado → esperando review.
 
 ## Requisitos
 

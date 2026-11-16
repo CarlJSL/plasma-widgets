@@ -23,18 +23,22 @@ def status(pr):
         ci = nodes[0]["commit"]["statusCheckRollup"]["state"]
     if pr["isDraft"]:
         return "draft", "Draft"
+    re_review = False
     if pr["reviewDecision"] == "CHANGES_REQUESTED":
         # Observado solo si la observación es sobre el último commit; si subí cambios después, espera re-review.
         vigente = any(r["state"] == "CHANGES_REQUESTED" and (r["commit"] or {}).get("oid") == pr["headRefOid"]
                       for r in pr["latestReviews"]["nodes"])
         if vigente:
             return "observado", "Observado"
-        if pr["mergeable"] != "CONFLICTING" and ci not in ("FAILURE", "ERROR"):
-            return "review", "Esperando re-review"
+        re_review = True
     if pr["mergeable"] == "CONFLICTING":
         return "conflicto", "Conflictos"
     if ci in ("FAILURE", "ERROR"):
         return "ci", "CI fallando"
+    if ci in ("PENDING", "EXPECTED"):
+        return "probando", "CI en curso"
+    if re_review:
+        return "review", "Esperando re-review"
     if pr["reviewDecision"] == "APPROVED":
         return "aprobado", "Aprobado"
     return "review", "Esperando review"

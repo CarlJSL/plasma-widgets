@@ -19,12 +19,13 @@ PlasmoidItem {
         "observado": Kirigami.Theme.negativeTextColor,
         "conflicto": Kirigami.Theme.negativeTextColor,
         "ci": Kirigami.Theme.negativeTextColor,
+        "probando": "#2f81f7",
         "aprobado": Kirigami.Theme.positiveTextColor,
         "review": Kirigami.Theme.neutralTextColor,
         "draft": Kirigami.Theme.disabledTextColor
     })
     readonly property var glyphs: ({
-        "observado": "!", "conflicto": "✕", "ci": "✕", "aprobado": "✓", "review": "…", "draft": "–"
+        "observado": "!", "conflicto": "✕", "ci": "✕", "probando": "↻", "aprobado": "✓", "review": "…", "draft": "–"
     })
     readonly property int attention: prs.filter(p => ["observado", "conflicto", "ci"].includes(p.status)).length
 
