@@ -15,17 +15,18 @@ PlasmoidItem {
     property bool loading: false
     readonly property string cmd: "python3 $HOME/.local/bin/my-prs"
 
+    // Colores fijos (no del tema): el tema los deja apagados/grises. Tonos medios que se leen en claro y oscuro.
     readonly property var colors: ({
-        "observado": Kirigami.Theme.negativeTextColor,
-        "conflicto": Kirigami.Theme.negativeTextColor,
-        "ci": Kirigami.Theme.negativeTextColor,
+        "observado": "#e5484d",
+        "conflicto": "#e5484d",
+        "ci": "#e5484d",
         "probando": "#2f81f7",
-        "aprobado": Kirigami.Theme.positiveTextColor,
-        "review": Kirigami.Theme.neutralTextColor,
-        "draft": Kirigami.Theme.disabledTextColor
+        "aprobado": "#2da44e",
+        "review": "#d98e04",
+        "draft": "#8b949e"
     })
     readonly property var glyphs: ({
-        "observado": "!", "conflicto": "✕", "ci": "✕", "probando": "↻", "aprobado": "✓", "review": "…", "draft": "–"
+        "observado": "!", "conflicto": "×", "ci": "×", "probando": "↻", "aprobado": "✓", "review": "…", "draft": "–"
     })
     readonly property int attention: prs.filter(p => ["observado", "conflicto", "ci"].includes(p.status)).length
 
@@ -141,7 +142,7 @@ PlasmoidItem {
                             radius: width / 2
                             color: root.colors[modelData.status]
                             Text { anchors.centerIn: parent; text: root.glyphs[modelData.status]
-                                color: "white"; font.bold: true; font.pixelSize: parent.height * 0.65 }
+                                color: "white"; font.bold: true; font.pixelSize: parent.height * 0.7; font.family: "DejaVu Sans" }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 0
