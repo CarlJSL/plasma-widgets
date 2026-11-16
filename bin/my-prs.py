@@ -58,7 +58,7 @@ def fetch(login):
     return json.loads(out)["data"]["search"]["nodes"]
 
 def main():
-    prs, errors, logins = [], [], []
+    prs, errors, failed, logins = [], [], [], []
     try:
         logins = accounts()
     except Exception as e:
@@ -67,7 +67,7 @@ def main():
         try:
             nodes = fetch(login)
         except Exception as e:
-            errors.append(f"{login}: {str(e)[:120]}"); continue
+            errors.append(f"{login}: {str(e)[:120]}"); failed.append(login); continue
         for n in nodes:
             if not n: continue
             key, label = status(n)
@@ -83,6 +83,6 @@ def main():
     top = {}
     for p in prs: top.setdefault(p["owner"], p["createdAt"])
     prs.sort(key=lambda p: (top[p["owner"]], p["createdAt"]), reverse=True)
-    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "accounts": logins}))
+    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "accounts": logins, "failed": failed}))
 
 main()

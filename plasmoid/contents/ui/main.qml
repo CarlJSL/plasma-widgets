@@ -30,6 +30,7 @@ PlasmoidItem {
     })
     readonly property int attention: prs.filter(p => ["observado", "conflicto", "ci"].includes(p.status)).length
 
+    property var failedAccounts: []
     property var prevStatus: ({})
     property bool initialized: false
     readonly property var notifyOn: ({
@@ -40,10 +41,12 @@ PlasmoidItem {
 
     function notifyChanges(list) {
         const next = {}
+        // Cuentas que fallaron: conservar su estado previo para no perder ni repetir avisos al volver.
+        for (const k in prevStatus) if (failedAccounts.includes(prevStatus[k].account)) next[k] = prevStatus[k]
         for (const p of list) {
             const k = p.owner + "#" + p.number
-            next[k] = p.status
-            if (initialized && prevStatus[k] !== p.status && notifyOn[p.status]) {
+            next[k] = { status: p.status, account: p.account }
+            if (initialized && (!prevStatus[k] || prevStatus[k].status !== p.status) && notifyOn[p.status]) {
                 const urgency = p.status === "aprobado" ? "normal" : "critical"
                 notifier.connectSource("notify-send -a 'Mis PRs' -i dialog-information -u " + urgency + " "
                     + q(p.repo + " #" + p.number + ": " + notifyOn[p.status]) + " " + q(p.title) + " # " + Date.now() + k)
@@ -71,7 +74,8 @@ PlasmoidItem {
                 const r = JSON.parse(data["stdout"])
                 root.prs = r.prs
                 root.accountCount = r.accounts ? r.accounts.length : 1
-                if (!r.error) root.notifyChanges(r.prs)
+                root.failedAccounts = r.failed ? r.failed : []
+                root.notifyChanges(r.prs)
                 root.errorMsg = r.error ? r.error : ""
             } catch (e) { root.errorMsg = data["stderr"] || String(e) }
         }
@@ -81,7 +85,7 @@ PlasmoidItem {
 
     Plasmoid.icon: Qt.resolvedUrl("github.svg")
     toolTipMainText: "Mis PRs abiertos"
-    toolTipSubText: errorMsg !== "" ? errorMsg : prs.length + " abiertos, " + attention + " requieren atención"
+    toolTipSubText: errorMsg !== "" ? "⚠ " + errorMsg : prs.length + " abiertos, " + attention + " requieren atención"
 
     compactRepresentation: MouseArea {
         onClicked: root.expanded = !root.expanded
@@ -91,6 +95,14 @@ PlasmoidItem {
             source: Qt.resolvedUrl("github.svg")
             isMask: true
             color: Kirigami.Theme.textColor
+        }
+        Rectangle {
+            visible: root.errorMsg !== ""
+            anchors { right: parent.right; top: parent.top }
+            width: Math.max(12, parent.height * 0.4); height: width; radius: width / 2
+            color: "#d98e04"
+            Text { anchors.centerIn: parent; text: "!"; color: "white"; font.bold: true
+                font.pixelSize: parent.height * 0.8; font.family: "DejaVu Sans" }
         }
         Rectangle {
             visible: root.prs.length > 0

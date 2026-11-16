@@ -8,6 +8,7 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 - Al hacer clic se abre la lista, agrupada por repo, con `#número título` y `rama → base`. Clic en una fila abre el PR en el navegador.
 - Muestra los PRs de **todas** las cuentas logueadas en `gh` (no solo la activa); si hay más de una, cada fila indica `@cuenta`.
 - Se actualiza solo cada 2,5 minutos; hay botón para forzar la consulta.
+- Si una cuenta falla (token vencido, sin red), las demás siguen mostrándose; el error sale en rojo en la lista, en el tooltip y como un punto ámbar `!` en el ícono de la barra.
 - Notificación de escritorio cuando un PR **cambia** a observado, con conflictos, CI fallando o aprobado (no avisa en la primera carga ni repite).
 - Ordenado por fecha de creación, más reciente primero, agrupado por repo.
 
