@@ -14,6 +14,42 @@ CONFIG = HOME / ".config/pr-tracker/config.json"
 JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
 FIELDS = ["summary", "status", "priority", "issuetype", "updated", "project"]
 
+CACHE = HOME / ".cache/pr-tracker/boards.json"
+
+def api(site, auth, path):
+    req = urlrequest.Request(f"https://{site}{path}", headers={"Authorization": auth, "Accept": "application/json"})
+    with urlrequest.urlopen(req, timeout=25) as r:
+        return json.loads(r.read())
+
+def boards_of(site, auth, project):
+    """Tableros del proyecto con sus columnas (cacheado un día: la configuración casi no cambia)."""
+    try: cache = json.loads(CACHE.read_text())
+    except Exception: cache = {}
+    hit = cache.get(project)
+    if hit and (datetime.now(timezone.utc).timestamp() - hit["at"]) < 86400:
+        return hit["boards"]
+    boards = []
+    for b in api(site, auth, f"/rest/agile/1.0/board?projectKeyOrId={project}&maxResults=50")["values"]:
+        try: c = api(site, auth, f"/rest/agile/1.0/board/{b['id']}/configuration")
+        except Exception: continue
+        boards.append({"id": b["id"], "name": b["name"],
+                       "columns": [{"name": col["name"], "statuses": [x["id"] for x in col["statuses"]]}
+                                   for col in c["columnConfig"]["columns"]]})
+    cache[project] = {"at": datetime.now(timezone.utc).timestamp(), "boards": boards}
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    CACHE.write_text(json.dumps(cache))
+    return boards
+
+def pick_board(boards, status_ids, forced):
+    """El tablero configurado o, si no, el que cubre más de mis estados y, a igualdad, el de más columnas."""
+    if forced:
+        for b in boards:
+            if b["id"] == forced: return b
+    def score(b):
+        have = {sid for c in b["columns"] for sid in c["statuses"]}
+        return (len(status_ids & have), len(b["columns"]), -b["id"])
+    return max(boards, key=score) if boards else None
+
 def out(d): print(json.dumps(d, ensure_ascii=False))
 
 def stage(status, cat):
@@ -52,7 +88,7 @@ def main():
                 cat = f["status"]["statusCategory"]["key"]
                 idle = (datetime.now(timezone.utc) - datetime.fromisoformat(f["updated"].replace("Z", "+00:00").replace("+0000", "+00:00"))).days
                 st = stage(f["status"]["name"], cat)
-                tickets.append({"key": i["key"], "summary": f["summary"], "status": f["status"]["name"], "cat": cat,
+                tickets.append({"statusId": f["status"]["id"], "key": i["key"], "summary": f["summary"], "status": f["status"]["name"], "cat": cat,
                                 "stage": st, "type": f["issuetype"]["name"], "priority": (f["priority"] or {}).get("name", ""),
                                 "project": f["project"]["key"], "updated": f["updated"], "idleDays": idle,
                                 "stale": st in (1, 2, 3, 5) and idle >= stale_days, "url": f"https://{site}/browse/{i['key']}"})
@@ -60,9 +96,32 @@ def main():
             if d.get("isLast", True) or not token: break
     except Exception as e:
         out({"error": "Jira: " + str(e)[:150], "tickets": []}); return
-    # por etapa del flujo; dentro de cada estado, lo más reciente primero
+    # Orden según el tablero de Jira: tablero → columna → más reciente primero.
+    chosen = {}
+    forced = cfg.get("boards", {})
+    for proj in sorted({t["project"] for t in tickets}):
+        try:
+            boards = boards_of(site, auth, proj)
+            ids = {t["statusId"] for t in tickets if t["project"] == proj}
+            chosen[proj] = pick_board(boards, ids, forced.get(proj))
+        except Exception:
+            chosen[proj] = None
+    for t in tickets:
+        b = chosen.get(t["project"])
+        col, idx = t["status"], 999
+        if b:
+            for n, c in enumerate(b["columns"]):
+                if t["statusId"] in c["statuses"]:
+                    col, idx = c["name"], n; break
+        t["board"] = b["name"] if b else t["project"]
+        t["column"], t["colIndex"] = col, idx
+    # los tableros con más tickets activos primero
+    weight = {}
+    for t in tickets:
+        if t["cat"] != "new": weight[t["board"]] = weight.get(t["board"], 0) + 1
     tickets.sort(key=lambda t: t["updated"], reverse=True)
-    tickets.sort(key=lambda t: (t["stage"], t["status"]))
+    tickets.sort(key=lambda t: (-weight.get(t["board"], 0), t["board"], t["colIndex"]))
+    for t in tickets: t["sec"] = t["board"] + " › " + t["column"]
     out({"error": None, "tickets": tickets, "staleDays": stale_days})
 
 main()

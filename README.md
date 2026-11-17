@@ -39,7 +39,7 @@ Prioridad cuando hay varios: draft → observado vigente → conflictos → CI f
 
 Segundo widget, independiente del de PRs, que usa la misma configuración de Jira (ver «Configuración opcional»):
 
-- Tus tickets asignados y abiertos, ordenados por etapa del flujo (en desarrollo, code review, QA, listo para deploy) y agrupados por estado, con tipo, prioridad y antigüedad.
+- Tus tickets asignados y abiertos, ordenados **según el tablero de Jira**: por tablero y, dentro de cada uno, por columna (en el orden en que aparecen en el board), con tipo, prioridad y antigüedad. Por cada proyecto elige el tablero que cubre más de tus estados (y, a igualdad, el de más columnas); se puede fijar con `"boards": {"IN": 35}` en `config.json`. La configuración de tableros se cachea un día.
 - Backlog y «por hacer» ocultos por defecto (casilla para mostrarlos).
 - Marca como «sin movimiento» los que están en curso y llevan `ticketStaleDays` o más días sin actualizarse (3 por defecto); el contador del ícono se pone rojo si hay alguno.
 - Botón **Copiar resumen** con tus tickets activos por estado, para el daily.
@@ -117,6 +117,7 @@ Archivo `~/.config/pr-tracker/config.json`:
   "staleDays": 2,
   "mergedDays": 5,
   "ticketStaleDays": 3,
+  "boards": { "PROYECTO": 123 },
   "jiraSite": "tuempresa.atlassian.net",
   "jiraEnv": "~/.config/pr-tracker/jira.env"
 }

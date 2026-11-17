@@ -21,7 +21,7 @@ PlasmoidItem {
     readonly property int staleCount: active.filter(t => t.stale).length
     readonly property var statusCount: {
         const m = {}
-        for (const t of visibleTickets) m[t.status] = (m[t.status] || 0) + 1
+        for (const t of visibleTickets) m[t.sec] = (m[t.sec] || 0) + 1
         return m
     }
 
@@ -84,9 +84,9 @@ PlasmoidItem {
         let out = "Mis tickets (" + d.getDate() + " de " + meses[d.getMonth()] + "): " + active.length + "\n"
         let last = ""
         for (const t of active) {
-            if (t.status !== last) {
-                out += "\n" + t.status + " (" + active.filter(x => x.status === t.status).length + ")\n"
-                last = t.status
+            if (t.sec !== last) {
+                out += "\n" + t.sec + " (" + active.filter(x => x.sec === t.sec).length + ")\n"
+                last = t.sec
             }
             out += "- " + t.key + " " + t.summary + "\n  " + t.url + "\n"
         }
@@ -165,11 +165,19 @@ PlasmoidItem {
             ListView {
                 model: root.visibleTickets
                 spacing: Kirigami.Units.smallSpacing
-                section.property: "status"
-                section.delegate: Kirigami.Heading {
+                section.property: "sec"
+                // "Tablero › Columna": la columna destacada y el tablero como contexto
+                section.delegate: RowLayout {
                     required property string section
-                    level: 5; opacity: 0.75; topPadding: Kirigami.Units.smallSpacing
-                    text: section + " (" + (root.statusCount[section] || 0) + ")"
+                    width: ListView.view ? ListView.view.width : 0
+                    Kirigami.Heading {
+                        level: 5; topPadding: Kirigami.Units.smallSpacing
+                        text: section.split(" › ")[1] + " (" + (root.statusCount[section] || 0) + ")"
+                    }
+                    Item { Layout.fillWidth: true }
+                    PlasmaComponents.Label {
+                        text: section.split(" › ")[0]; opacity: 0.6; font: Kirigami.Theme.smallFont
+                    }
                 }
                 delegate: PlasmaComponents.ItemDelegate {
                     id: row
