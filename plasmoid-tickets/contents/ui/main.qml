@@ -171,11 +171,12 @@ PlasmoidItem {
                     required property string section
                     width: ListView.view ? ListView.view.width : 0
                     Kirigami.Heading {
-                        level: 5; topPadding: Kirigami.Units.smallSpacing
+                        level: 5; topPadding: Kirigami.Units.gridUnit * 0.6
                         text: section.split(" › ")[1] + " (" + (root.statusCount[section] || 0) + ")"
                     }
                     Item { Layout.fillWidth: true }
                     PlasmaComponents.Label {
+                        Layout.topMargin: Kirigami.Units.gridUnit * 0.6
                         text: section.split(" › ")[0]; opacity: 0.6; font: Kirigami.Theme.smallFont
                     }
                 }
@@ -187,6 +188,8 @@ PlasmoidItem {
                     contentItem: RowLayout {
                         spacing: Kirigami.Units.smallSpacing
                         Rectangle {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: 2
                             Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
                             Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
                             radius: width / 2
@@ -195,24 +198,38 @@ PlasmoidItem {
                                 color: "white"; font.bold: true; font.pixelSize: parent.height * 0.7; font.family: "DejaVu Sans" }
                         }
                         ColumnLayout {
-                            Layout.fillWidth: true; spacing: 0
-                            PlasmaComponents.Label {
-                                text: modelData.key + "  " + modelData.summary
-                                elide: Text.ElideRight; Layout.fillWidth: true
-                            }
+                            Layout.fillWidth: true; spacing: 1
+                            // Línea de contexto: clave, antigüedad y solo lo que merece atención
                             RowLayout {
                                 Layout.fillWidth: true; spacing: Kirigami.Units.smallSpacing
                                 PlasmaComponents.Label {
-                                    text: modelData.priority; color: root.prioColor(modelData.priority); font: Kirigami.Theme.smallFont
+                                    text: modelData.key; font.bold: true; font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                                    opacity: 0.85
                                 }
                                 PlasmaComponents.Label {
-                                    text: modelData.type + "  ·  " + (modelData.idleDays === 0 ? "hoy" : "hace " + modelData.idleDays + " d")
-                                    opacity: 0.75; font: Kirigami.Theme.smallFont; Layout.fillWidth: true; elide: Text.ElideRight
+                                    text: (modelData.idleDays === 0 ? "hoy" : "hace " + modelData.idleDays + " d")
+                                    opacity: 0.6; font: Kirigami.Theme.smallFont
                                 }
-                                PlasmaComponents.Label {
+                                Rectangle {
+                                    visible: modelData.priority === "Highest" || modelData.priority === "High"
+                                    radius: 3; color: root.prioColor(modelData.priority)
+                                    implicitWidth: prioText.implicitWidth + 8; implicitHeight: prioText.implicitHeight + 2
+                                    Text { id: prioText; anchors.centerIn: parent; text: modelData.priority; color: "white"
+                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
+                                }
+                                Rectangle {
                                     visible: modelData.stale
-                                    text: "sin movimiento"; color: "#d98e04"; font: Kirigami.Theme.smallFont
+                                    radius: 3; color: "#d98e04"
+                                    implicitWidth: staleText.implicitWidth + 8; implicitHeight: staleText.implicitHeight + 2
+                                    Text { id: staleText; anchors.centerIn: parent; text: "sin movimiento"; color: "white"
+                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
                                 }
+                                Item { Layout.fillWidth: true }
+                            }
+                            PlasmaComponents.Label {
+                                text: modelData.summary
+                                wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+                                Layout.fillWidth: true
                             }
                         }
                         RowLayout {
