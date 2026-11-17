@@ -111,16 +111,23 @@ PlasmoidItem {
     property bool copied: false
     property string selectedKey: "mine"
 
-    // "Para revisar" solo existe cuando alguien te está esperando.
-    readonly property var tabModel: {
-        const t = [{ key: "mine", title: "Mis PRs (" + prs.length + ")" }]
-        if (review.length > 0) t.push({ key: "review", title: "Para revisar (" + review.length + ")" })
-        t.push({ key: "watch", title: "Seguimiento (" + watching.length + ")" })
-        t.push({ key: "merged", title: "Mergeados (" + merged.length + ")" })
-        return t
+    // "Para revisar" solo existe cuando alguien te está esperando. tabKeys cambia solo cuando cambia la
+    // composición de pestañas (no en cada refresco), para no reconstruir la barra.
+    property var tabKeys: ["mine", "watch", "merged"]
+    function refreshTabs() {
+        const k = ["mine"]
+        if (review.length > 0) k.push("review")
+        k.push("watch", "merged")
+        if (k.join() !== tabKeys.join()) tabKeys = k
+    }
+    function titleOf(key) {
+        if (key === "mine") return "Mis PRs (" + prs.length + ")"
+        if (key === "review") return "Para revisar (" + review.length + ")"
+        if (key === "watch") return "Seguimiento (" + watching.length + ")"
+        return "Mergeados (" + merged.length + ")"
     }
     // Si la pestaña elegida desaparece, volver a la primera.
-    readonly property string activeTab: tabModel.some(t => t.key === selectedKey) ? selectedKey : "mine"
+    readonly property string activeTab: tabKeys.indexOf(selectedKey) >= 0 ? selectedKey : "mine"
 
     // Texto para pasarle a un revisor o al TL: qué necesita su review y qué ya está listo.
     function buildSummary() {
@@ -204,6 +211,7 @@ PlasmoidItem {
                 root.failedAccounts = r.failed ? r.failed : []
                 root.notifyChanges(r.prs)
                 root.notifyExtras(r)
+                root.refreshTabs()
                 root.errorMsg = r.error ? r.error : ""
             } catch (e) { root.errorMsg = data["stderr"] || String(e) }
         }
@@ -273,18 +281,23 @@ PlasmoidItem {
 
         RowLayout {
             Layout.fillWidth: true
-            RowLayout {
-                Layout.fillWidth: true; spacing: 0
+            PlasmaComponents.TabBar {
+                id: tabs
+                Layout.fillWidth: true
                 Repeater {
-                    model: root.tabModel
-                    delegate: PlasmaComponents.ToolButton {
-                        text: modelData.title
-                        highlighted: root.activeTab === modelData.key
-                        font.bold: highlighted
-                        onClicked: root.selectedKey = modelData.key
+                    model: root.tabKeys
+                    delegate: PlasmaComponents.TabButton {
+                        text: root.titleOf(modelData)
+                        onClicked: root.selectedKey = modelData
                     }
                 }
-                Item { Layout.fillWidth: true }
+                // Al cambiar las pestañas, la barra se reconstruye: volver a marcar la activa.
+                Connections {
+                    target: root
+                    function onTabKeysChanged() {
+                        Qt.callLater(() => { tabs.currentIndex = root.tabKeys.indexOf(root.activeTab) })
+                    }
+                }
             }
             PlasmaComponents.ToolButton {
                 icon.name: "view-refresh"; enabled: !root.loading
