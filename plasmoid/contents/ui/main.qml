@@ -62,6 +62,40 @@ PlasmoidItem {
         onNewData: (source, data) => disconnectSource(source)
     }
 
+    property bool copied: false
+
+    // Texto para pasarle a un revisor o al TL: qué necesita su review y qué ya está listo.
+    function buildSummary() {
+        const sections = [
+            ["🔎 Necesitan review", p => p.status === "review" && p.label === "Esperando review"],
+            ["♻️ Esperando re-review (ya subí los cambios de la observación)", p => p.status === "review" && p.label !== "Esperando review"],
+            ["✅ Aprobados, listos para merge", p => p.status === "aprobado"],
+            ["⏳ CI en curso", p => p.status === "probando"],
+            ["🛠 Por atender de mi lado (observados, conflictos o CI fallando)", p => ["observado", "conflicto", "ci"].includes(p.status)],
+            ["📝 Drafts", p => p.status === "draft"]
+        ]
+        let out = "Resumen de mis PRs abiertos (" + Qt.formatDate(new Date(), "d MMM") + "): " + prs.length + "\n"
+        for (const [title, test] of sections) {
+            const list = prs.filter(test)
+            if (list.length === 0) continue
+            out += "\n" + title + " (" + list.length + ")\n"
+            for (const p of list)
+                out += "• " + p.repo + " #" + p.number + " " + p.title + "\n  " + p.url + "\n"
+        }
+        return out.trim()
+    }
+
+    function copySummary() {
+        clip.text = buildSummary()
+        clip.selectAll()
+        clip.copy()
+        copied = true
+        copiedTimer.restart()
+    }
+
+    TextEdit { id: clip; visible: false }
+    Timer { id: copiedTimer; interval: 2000; onTriggered: root.copied = false }
+
     function refresh() { loading = true; src.connectSource(cmd) }
 
     P5Support.DataSource {
@@ -124,6 +158,13 @@ PlasmoidItem {
         RowLayout {
             Layout.fillWidth: true
             Kirigami.Heading { level: 3; text: "Mis PRs abiertos (" + root.prs.length + ")"; Layout.fillWidth: true }
+            PlasmaComponents.Button {
+                icon.name: root.copied ? "dialog-ok" : "edit-copy"
+                text: root.copied ? "¡Copiado!" : "Copiar resumen"
+                enabled: root.prs.length > 0
+                onClicked: root.copySummary()
+                PlasmaComponents.ToolTip { text: "Copia al portapapeles un resumen de mis PRs para el revisor o el TL" }
+            }
             PlasmaComponents.ToolButton {
                 icon.name: "view-refresh"; enabled: !root.loading
                 onClicked: root.refresh()

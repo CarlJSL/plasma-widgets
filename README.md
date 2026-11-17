@@ -7,6 +7,7 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 - Ícono de GitHub en el panel con un contador de PRs abiertos (rojo si alguno requiere atención, azul si no).
 - Al hacer clic se abre la lista, agrupada por repo, con `#número título` y `rama → base`. Clic en una fila abre el PR en el navegador.
 - Muestra los PRs de **todas** las cuentas logueadas en `gh` (no solo la activa); si hay más de una, cada fila indica `@cuenta`.
+- Botón **Copiar resumen**: copia al portapapeles un texto para el revisor o el TL, con los PRs agrupados (necesitan review, esperando re-review, aprobados, CI en curso, por atender, drafts) y sus links.
 - Se actualiza solo cada 2,5 minutos; hay botón para forzar la consulta.
 - Si una cuenta falla (token vencido, sin red), las demás siguen mostrándose; el error sale en rojo en la lista, en el tooltip y como un punto ámbar `!` en el ícono de la barra.
 - Notificación de escritorio cuando un PR **cambia** a observado, con conflictos, CI fallando o aprobado (no avisa en la primera carga ni repite).
