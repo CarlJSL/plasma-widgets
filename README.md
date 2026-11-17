@@ -35,6 +35,19 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 
 Prioridad cuando hay varios: draft → observado vigente → conflictos → CI fallando → CI en curso → esperando re-review → aprobado → esperando review.
 
+## Widget «Mis tickets» (Jira)
+
+Segundo widget, independiente del de PRs, que usa la misma configuración de Jira (ver «Configuración opcional»):
+
+- Tus tickets asignados y abiertos, ordenados por etapa del flujo (en desarrollo, code review, QA, listo para deploy) y agrupados por estado, con tipo, prioridad y antigüedad.
+- Backlog y «por hacer» ocultos por defecto (casilla para mostrarlos).
+- Marca como «sin movimiento» los que están en curso y llevan `ticketStaleDays` o más días sin actualizarse (3 por defecto); el contador del ícono se pone rojo si hay alguno.
+- Botón **Copiar resumen** con tus tickets activos por estado, para el daily.
+- Notificación cuando te asignan un ticket nuevo.
+- Refresco cada 5 minutos. Clic en una fila abre el ticket.
+
+Requiere `jiraSite` y `jiraEnv` en `config.json`. Se añade al panel como **Mis tickets**.
+
 ## Requisitos
 
 - KDE Plasma 6 (`kpackagetool6`)
@@ -103,6 +116,7 @@ Archivo `~/.config/pr-tracker/config.json`:
 {
   "staleDays": 2,
   "mergedDays": 5,
+  "ticketStaleDays": 3,
   "jiraSite": "tuempresa.atlassian.net",
   "jiraEnv": "~/.config/pr-tracker/jira.env"
 }

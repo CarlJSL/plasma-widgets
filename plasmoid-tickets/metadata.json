@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "io.personal.tickettracker",
+    "Name": "Mis tickets",
+    "Description": "Tickets de Jira asignados a mí, por etapa del flujo",
+    "Icon": "view-task",
+    "Authors": [{ "Name": "CarlJSL" }],
+    "Category": "Development",
+    "License": "MIT",
+    "Version": "1.0"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}
