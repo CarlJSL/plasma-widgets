@@ -4,8 +4,13 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 
 ## Qué hace
 
-- Ícono de GitHub en el panel con un contador de PRs abiertos (rojo si alguno requiere atención, azul si no).
-- Al hacer clic se abre la lista, agrupada por repo, con `#número título` y `rama → base`. Clic en una fila abre el PR en el navegador.
+- Ícono de GitHub en el panel con un contador de PRs abiertos (rojo si alguno requiere atención, azul si no) y, abajo a la izquierda, un contador ámbar con lo que **depende de ti**: PRs que te piden review + PRs en seguimiento ya mergeados.
+- Al hacer clic se abre el panel con tres pestañas:
+  - **Mis PRs:** tus PRs abiertos, agrupados por repo, con `#número título`, estado, ticket de Jira (si está configurado) y `rama → base`.
+  - **Para revisar:** PRs de otros que te pidieron review, con su antigüedad.
+  - **Seguimiento:** PRs ajenos de los que dependes. Pegas el link y una nota («cuando se mergee abro el mío») y el widget te avisa con una notificación cuando se hace merge o se cierra. Queda en la lista hasta que lo quites.
+- Clic en una fila abre el PR. Al pasar el mouse aparecen acciones: copiar link, abrir los checks (CI) y, en tus PRs observados o en re-review, **pedir re-review** a quienes ya revisaron.
+- **Estancados:** un PR esperando review sin actividad por `staleDays` o más (por defecto 2) se marca «sin movimiento N d» y recibes **un recordatorio diario** (después de las 9:00).
 - Muestra los PRs de **todas** las cuentas logueadas en `gh` (no solo la activa); si hay más de una, cada fila indica `@cuenta`.
 - Botón **Copiar resumen**: copia al portapapeles un texto para el revisor o el TL, con los PRs agrupados (necesitan review, esperando re-review, aprobados, CI en curso, por atender, drafts) y sus links.
 - Se actualiza solo cada 2,5 minutos; hay botón para forzar la consulta.
@@ -84,9 +89,43 @@ Prioridad cuando hay varios: draft → observado vigente → conflictos → CI f
 
 ## Cómo funciona
 
-- `bin/my-prs.py` lista las cuentas de `gh` y, por cada una, hace **una** consulta GraphQL con `gh api graphql` usando su token (`is:pr is:open author:@me`) y devuelve JSON con estado de review, CI y mergeabilidad. Se puede usar solo desde la terminal: `my-prs | jq`.
+- `bin/my-prs.py` lista las cuentas de `gh` y, por cada una, hace dos consultas GraphQL con `gh api graphql` usando su token (`author:@me` y `review-requested:@me`), más una por cada PR en seguimiento y devuelve JSON con estado de review, CI y mergeabilidad. Se puede usar solo desde la terminal: `my-prs | jq`.
 - `plasmoid/` es el widget QML. Ejecuta el script con el motor `executable` de Plasma5Support y pinta el resultado.
 - Un PR cuenta como «Observado» solo si el review de cambios solicitados es sobre el commit actual (`headRefOid`); si subiste commits después, pasa a re-review.
+
+## Configuración opcional
+
+Archivo `~/.config/pr-tracker/config.json`:
+
+```json
+{
+  "staleDays": 2,
+  "jiraSite": "tuempresa.atlassian.net",
+  "jiraEnv": "~/.config/pr-tracker/jira.env"
+}
+```
+
+**Jira (opcional):** si `jiraSite` y las credenciales existen, cada PR muestra el estado de su ticket (la clave se toma del título o de la rama, por ejemplo `ABC-123`). Las credenciales van en el archivo `jiraEnv` (por defecto `~/.config/pr-tracker/jira.env`, con `chmod 600`):
+
+```sh
+printf 'JIRA_EMAIL=<tu email>\nJIRA_API_TOKEN=<token>\n' > ~/.config/pr-tracker/jira.env
+chmod 600 ~/.config/pr-tracker/jira.env
+```
+
+El token se genera en [id.atlassian.com → Seguridad → API tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Sin esta configuración, el widget funciona igual, solo sin el dato de Jira.
+
+## CLI
+
+El script también sirve desde la terminal:
+
+```sh
+my-prs | jq                          # JSON con todo
+my-prs watch add <URL> [nota]        # seguir un PR ajeno
+my-prs watch rm <URL>                # dejar de seguirlo
+my-prs rereview <cuenta> <URL>       # pedir re-review a quienes ya revisaron
+```
+
+Los PRs en seguimiento se guardan en `~/.local/share/pr-tracker/watch.json`.
 
 ## Personalizar
 
