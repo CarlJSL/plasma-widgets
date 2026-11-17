@@ -67,20 +67,20 @@ PlasmoidItem {
     // Texto para pasarle a un revisor o al TL: qué necesita su review y qué ya está listo.
     function buildSummary() {
         const sections = [
-            ["🔎 Necesitan review", p => p.status === "review" && p.label === "Esperando review"],
-            ["♻️ Esperando re-review (ya subí los cambios de la observación)", p => p.status === "review" && p.label !== "Esperando review"],
-            ["✅ Aprobados, listos para merge", p => p.status === "aprobado"],
-            ["⏳ CI en curso", p => p.status === "probando"],
-            ["🛠 Por atender de mi lado (observados, conflictos o CI fallando)", p => ["observado", "conflicto", "ci"].includes(p.status)],
-            ["📝 Drafts", p => p.status === "draft"]
+            ["Necesitan review", p => p.status === "review" && p.label === "Esperando review"],
+            ["Esperando re-review (ya subí los cambios de la observación)", p => p.status === "review" && p.label !== "Esperando review"],
+            ["Aprobados, listos para merge", p => p.status === "aprobado"],
+            ["CI en curso", p => p.status === "probando"],
+            ["Por atender de mi lado (observados, conflictos o CI fallando)", p => ["observado", "conflicto", "ci"].includes(p.status)],
+            ["Drafts", p => p.status === "draft"]
         ]
-        let out = "Resumen de mis PRs abiertos (" + Qt.formatDate(new Date(), "d MMM") + "): " + prs.length + "\n"
+        let out = "Resumen de mis PRs abiertos (" + (d => d.getDate() + " de " + ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"][d.getMonth()])(new Date()) + "): " + prs.length + "\n"
         for (const [title, test] of sections) {
             const list = prs.filter(test)
             if (list.length === 0) continue
             out += "\n" + title + " (" + list.length + ")\n"
             for (const p of list)
-                out += "• " + p.repo + " #" + p.number + " " + p.title + "\n  " + p.url + "\n"
+                out += "- " + p.repo + " #" + p.number + " " + p.title + "\n  " + p.url + "\n"
         }
         return out.trim()
     }
