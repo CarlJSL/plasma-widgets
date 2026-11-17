@@ -7,6 +7,7 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 - Ícono de GitHub en el panel con un contador de PRs abiertos (rojo si alguno requiere atención, azul si no) y, abajo a la izquierda, un contador ámbar con lo que **depende de ti**: PRs que te piden review + PRs en seguimiento ya mergeados.
 - Al hacer clic se abre el panel con tres pestañas:
   - **Mis PRs:** tus PRs abiertos, agrupados por repo, con `#número título`, estado, ticket de Jira (si está configurado) y `rama → base`.
+  - Los PRs de un mismo **cambio** (por ejemplo front + back) se agrupan en una tarjeta con avisos: «front aprobado, pero back observado», «front ya se mergeó; falta back» o «todos aprobados: se pueden mergear juntos». Se agrupan por el mismo ticket, o por un par `st-X`/`api-X` con el mismo título (sin «(app)»/«(api)»). Los desalineados también mandan notificación.
   - **Para revisar:** PRs de otros que te pidieron review, con su antigüedad.
   - **Mergeados:** tus PRs mergeados en los últimos `mergedDays` días (5 por defecto), con cuándo se mergearon, a qué rama y el estado de su ticket.
   - **Seguimiento:** PRs ajenos de los que dependes. Pegas el link y una nota («cuando se mergee abro el mío») y el widget te avisa con una notificación cuando se hace merge o se cierra. Queda en la lista hasta que lo quites.

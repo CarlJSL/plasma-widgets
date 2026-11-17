@@ -107,6 +107,92 @@ def ticket_of(pr):
     return m.group(1) if m else None
 
 
+# ---------- cambios con varios PRs (front + back) ----------
+def role_of(repo):
+    r = repo.lower()
+    if r.startswith(("st-", "front-", "app-")) or r.endswith(("-front", "-app")): return "front"
+    if r.startswith(("api-", "back-", "fn-")) or r.endswith(("-api", "-back")): return "back"
+    return repo
+
+def family(repo):
+    r = re.sub(r"^(st|api|fn|front|back|app)-", "", repo.lower())
+    return re.sub(r"-(front|back|api|app)$", "", r)
+
+def norm_title(t):
+    t = re.sub(r"^\s*\w+(\([^)]*\))?!?:\s*", "", t.lower())
+    t = re.sub(r"\((app|api|front|back|frontend|backend|st|fe|be)\)", "", t)
+    return re.sub(r"\s+", " ", t).strip(" -·")
+
+def related(a, b):
+    """Dos PRs de repos distintos pertenecen al mismo cambio: mismo ticket, o par st-/api- con el mismo título."""
+    if a["owner"] == b["owner"]: return False
+    if a.get("ticket") and a.get("ticket") == b.get("ticket"): return True
+    nt = norm_title(a["title"])
+    return len(nt) >= 12 and family(a["repo"]) == family(b["repo"]) and nt == norm_title(b["title"])
+
+BAD = ("observado", "conflicto", "ci")
+
+def build_groups(prs, merged):
+    items = prs + merged
+    parent = list(range(len(items)))
+    def find(i):
+        while parent[i] != i: parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if related(items[i], items[j]): parent[find(i)] = find(j)
+    comps = {}
+    for i, it in enumerate(items): comps.setdefault(find(i), []).append(it)
+    groups = []
+    for members in comps.values():
+        open_ = [m for m in members if m["status"] != "mergeado"]
+        if len(members) < 2 or not open_: continue
+        roles = [role_of(m["repo"]) for m in members]
+        def name(m):
+            r = role_of(m["repo"])
+            return r if roles.count(r) == 1 else f"{m['repo']} #{m['number']}"
+        done = [m for m in members if m["status"] == "mergeado"]
+        warns, code, tone = [], None, "wait"
+        bad = [m for m in open_ if m["status"] in BAD]
+        appr = [m for m in open_ if m["status"] == "aprobado"]
+        if done:
+            code, tone = "desync", "bad"
+            warns.append(", ".join(name(m) for m in done) + " ya se mergeó; falta: "
+                         + ", ".join(f"{name(m)} ({m['label']})" for m in open_))
+        elif len(appr) == len(open_):
+            code, tone = "ready", "ok"
+            warns.append("Todos aprobados: se pueden mergear juntos")
+        elif appr and bad:
+            code, tone = "mixed", "bad"
+            warns.append(", ".join(name(m) for m in appr) + " aprobado, pero "
+                         + ", ".join(f"{name(m)}: {m['label']}" for m in bad))
+        elif appr:
+            warns.append(", ".join(name(m) for m in appr) + " aprobado; falta "
+                         + ", ".join(f"{name(m)} ({m['label']})" for m in open_ if m["status"] != "aprobado"))
+        elif bad:
+            tone = "bad"
+        title = norm_title(members[0]["title"])
+        tickets = sorted({m["ticket"] for m in members if m.get("ticket")})
+        members.sort(key=lambda m: (m["status"] == "mergeado", role_of(m["repo"]) != "front", m["repo"]))
+        gid = "|".join(sorted(m["url"] for m in members))
+        groups.append({"id": gid, "title": (title[:1].upper() + title[1:]) if title else " + ".join(tickets),
+                       "tickets": tickets, "code": code, "tone": tone, "warnings": warns,
+                       "createdAt": max(m["createdAt"] for m in members),
+                       "members": [{"name": name(m), "status": m["status"], "label": m["label"], "url": m["url"],
+                                    "number": m["number"], "repo": m["repo"]} for m in members], "_m": members})
+    groups.sort(key=lambda g: g["createdAt"], reverse=True)
+    return groups
+
+def mine_view(prs, groups):
+    """Lista plana para el widget: cada cambio agrupado (sec = g:<id>) seguido de los PRs sueltos por repo."""
+    view, used = [], set()
+    for g in groups:
+        for m in g.pop("_m"):
+            used.add(m["url"]); view.append({**m, "sec": "g:" + g["id"], "role": role_of(m["repo"])})
+    for p in prs:
+        if p["url"] not in used: view.append({**p, "sec": p["repo"], "role": ""})
+    return view
+
 # ---------- Jira (opcional) ----------
 def jira_conf():
     cfg = load(CONFIG, {})
@@ -260,12 +346,13 @@ def main():
         watching = [f.result() for f in wfut]
 
     # Jira (opcional): estado del ticket de cada PR mío
+    for p in prs + merged + review:
+        k = TICKET.search(p["title"]) or TICKET.search(p["branch"].upper())
+        p["ticket"] = k.group(1) if k else None
     conf = jira_conf()
     if conf:
         keys = {}
         for p in prs + merged:
-            k = TICKET.search(p["title"]) or TICKET.search(p["branch"].upper())
-            p["ticket"] = k.group(1) if k else None
             if p["ticket"]: keys[p["ticket"]] = None
         with ThreadPoolExecutor(max_workers=6) as ex:
             for k, v in zip(keys, ex.map(lambda k: jira_status(conf, k), keys)): keys[k] = v
@@ -282,6 +369,9 @@ def main():
     order(prs); order(review)
     merged.sort(key=lambda p: p["mergedAt"], reverse=True)
 
+    groups = build_groups(prs, merged)
+    view = mine_view(prs, groups)
+
     # Recordatorio diario de estancados (solo el widget consume el aviso)
     remind = []
     if "--widget" in argv:
@@ -292,7 +382,7 @@ def main():
             remind = [{"repo": p["repo"], "number": p["number"], "idleDays": p["idleDays"]} for p in stale]
             st["lastReminder"] = today; save(STATE, st)
 
-    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "review": review, "merged": merged, "watching": watching,
+    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "review": review, "merged": merged, "mineView": view, "groups": groups, "watching": watching,
                       "remind": remind, "accounts": logins, "failed": failed, "jira": bool(conf), "staleDays": stale_days, "mergedDays": merged_days}))
 
 main()

@@ -12,6 +12,9 @@ PlasmoidItem {
     property var prs: []
     property var review: []
     property var merged: []
+    property var mineView: []
+    property var groups: []
+    property var groupById: ({})
     property int mergedDays: 5
     property var watching: []
     property bool jiraOn: false
@@ -41,6 +44,7 @@ PlasmoidItem {
     readonly property int watchDone: watching.filter(w => w.state !== "OPEN" && w.state !== "UNKNOWN").length
     readonly property int pending: review.length + watchDone
     readonly property int attention: prs.filter(p => ["observado", "conflicto", "ci"].includes(p.status)).length
+        + groups.filter(g => g.code === "desync").length
 
     property var failedAccounts: []
     property var prevStatus: ({})
@@ -59,6 +63,8 @@ PlasmoidItem {
     property var prevReview: ({})
     property bool reviewInit: false
     property var ackedLocal: []
+    property var prevGroups: ({})
+    property bool groupsInit: false
 
     function notifyExtras(r) {
         // Nuevos PRs que piden mi review
@@ -71,6 +77,16 @@ PlasmoidItem {
         }
         prevReview = next
         reviewInit = true
+        // Cambios con varios PRs (front + back): avisar cuando quedan desalineados o listos para mergear juntos
+        const gnext = {}
+        for (const g of r.groups || []) {
+            const k = g.id + "|" + g.code
+            if (g.code) gnext[k] = true
+            if (groupsInit && g.code && !prevGroups[k] && ["desync", "mixed", "ready"].includes(g.code))
+                notify(g.title, g.warnings.join("\n"), g.code === "ready" ? "normal" : "critical")
+        }
+        prevGroups = gnext
+        groupsInit = true
         // PRs en seguimiento que ya se mergearon o cerraron (se avisa una sola vez, queda marcado en disco)
         for (const w of r.watching) {
             if ((w.state === "MERGED" || w.state === "CLOSED") && !w.acked && !ackedLocal.includes(w.url)) {
@@ -204,6 +220,11 @@ PlasmoidItem {
                 root.prs = r.prs
                 root.review = r.review || []
                 root.merged = r.merged || []
+                root.mineView = r.mineView || []
+                root.groups = r.groups || []
+                const gm = {}
+                for (const g of root.groups) gm[g.id] = g
+                root.groupById = gm
                 root.mergedDays = r.mergedDays || 5
                 root.watching = r.watching || []
                 root.jiraOn = r.jira === true
@@ -221,6 +242,7 @@ PlasmoidItem {
 
     function subtitleOf(p) {
         let parts = []
+        if (p.role) parts.push(p.role)
         if (p.ticket) parts.push(p.ticket + (p.ticketStatus ? " · " + p.ticketStatus : ""))
         if (p.author) parts.push("de " + p.author)
         parts.push(p.branch + " → " + p.base)
@@ -333,10 +355,43 @@ PlasmoidItem {
                 PlasmaComponents.ScrollView {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     ListView {
-                        model: root.prs
+                        model: root.mineView
                         spacing: Kirigami.Units.smallSpacing
-                        section.property: "repo"
-                        section.delegate: Kirigami.Heading { level: 5; text: section; opacity: 0.7; topPadding: Kirigami.Units.smallSpacing }
+                        section.property: "sec"
+                        section.delegate: Item {
+                            id: sec
+                            required property string section
+                            readonly property var g: section.startsWith("g:") ? root.groupById[section.substring(2)] : null
+                            width: ListView.view ? ListView.view.width : 0
+                            implicitHeight: secCol.implicitHeight + Kirigami.Units.smallSpacing * 3
+                            height: implicitHeight
+                            Rectangle {
+                                visible: sec.g !== null && sec.g !== undefined
+                                anchors.fill: parent; anchors.topMargin: Kirigami.Units.smallSpacing
+                                radius: Kirigami.Units.cornerRadius
+                                color: sec.g ? (sec.g.tone === "bad" ? "#e5484d" : sec.g.tone === "ok" ? "#2da44e" : "#d98e04") : "transparent"
+                                opacity: 0.14
+                            }
+                            ColumnLayout {
+                                id: secCol
+                                anchors { left: parent.left; right: parent.right; top: parent.top
+                                    leftMargin: Kirigami.Units.smallSpacing; topMargin: Kirigami.Units.smallSpacing * 1.5 }
+                                spacing: 0
+                                Kirigami.Heading {
+                                    level: 5; Layout.fillWidth: true; elide: Text.ElideRight
+                                    text: sec.g ? "Cambio: " + sec.g.title + (sec.g.tickets.length ? "  (" + sec.g.tickets.join(", ") + ")" : "") : sec.section
+                                    opacity: sec.g ? 1 : 0.7
+                                }
+                                Repeater {
+                                    model: sec.g ? sec.g.warnings : []
+                                    delegate: PlasmaComponents.Label {
+                                        Layout.fillWidth: true; wrapMode: Text.Wrap; font: Kirigami.Theme.smallFont
+                                        text: modelData
+                                        color: sec.g.tone === "bad" ? "#e5484d" : sec.g.tone === "ok" ? "#2da44e" : "#d98e04"
+                                    }
+                                }
+                            }
+                        }
                         delegate: PRRow {
                             width: ListView.view.width
                             pr: modelData; colors: root.colors; glyphs: root.glyphs
