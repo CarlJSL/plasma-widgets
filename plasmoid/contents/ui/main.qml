@@ -11,6 +11,8 @@ PlasmoidItem {
 
     property var prs: []
     property var review: []
+    property var merged: []
+    property int mergedDays: 5
     property var watching: []
     property bool jiraOn: false
     property string toast: ""
@@ -182,6 +184,8 @@ PlasmoidItem {
                 const r = JSON.parse(data["stdout"])
                 root.prs = r.prs
                 root.review = r.review || []
+                root.merged = r.merged || []
+                root.mergedDays = r.mergedDays || 5
                 root.watching = r.watching || []
                 root.jiraOn = r.jira === true
                 root.accountCount = r.accounts ? r.accounts.length : 1
@@ -263,6 +267,7 @@ PlasmoidItem {
                 PlasmaComponents.TabButton { text: "Mis PRs (" + root.prs.length + ")" }
                 PlasmaComponents.TabButton { text: "Para revisar (" + root.review.length + ")" }
                 PlasmaComponents.TabButton { text: "Seguimiento (" + root.watching.length + ")" }
+                PlasmaComponents.TabButton { text: "Mergeados (" + root.merged.length + ")" }
             }
             PlasmaComponents.ToolButton {
                 icon.name: "view-refresh"; enabled: !root.loading
@@ -377,6 +382,31 @@ PlasmoidItem {
                     visible: root.watching.length === 0
                     Layout.alignment: Qt.AlignHCenter; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true; wrapMode: Text.Wrap
                     text: "Pega el link de un PR ajeno del que dependes. Te aviso cuando se haga merge."
+                }
+            }
+
+            // ---------- Mergeados (últimos días) ----------
+            ColumnLayout {
+                PlasmaComponents.ScrollView {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    ListView {
+                        model: root.merged
+                        spacing: Kirigami.Units.smallSpacing
+                        delegate: PRRow {
+                            width: ListView.view.width
+                            pr: modelData; colors: root.colors; glyphs: root.glyphs
+                            subtitle: (modelData.mergedDaysAgo === 0 ? "hoy" : "hace " + modelData.mergedDaysAgo + " d")
+                                + "  ·  " + modelData.repo + " → " + modelData.base
+                                + (modelData.ticket ? "  ·  " + modelData.ticket + (modelData.ticketStatus ? " · " + modelData.ticketStatus : "") : "")
+                            onCopyLink: url => root.copyLink(url)
+                            onOpenChecks: url => root.openChecks(url)
+                        }
+                    }
+                }
+                PlasmaComponents.Label {
+                    visible: root.merged.length === 0
+                    Layout.alignment: Qt.AlignHCenter
+                    text: root.loading ? "Cargando…" : "Ningún PR mergeado en los últimos " + root.mergedDays + " días"
                 }
             }
         }

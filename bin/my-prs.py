@@ -10,7 +10,7 @@ Uso:
 """
 import json, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib import request as urlrequest
 
@@ -30,6 +30,7 @@ PR_FIELDS = """
 """
 Q_MINE = "query { search(query: \"is:pr is:open author:@me archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s } } } }" % PR_FIELDS
 Q_REVIEW = "query { search(query: \"is:pr is:open review-requested:@me draft:false archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s } } } }" % PR_FIELDS
+Q_MERGED = "query($q:String!) { search(query: $q, type: ISSUE, first: 50) { nodes { ... on PullRequest { %s mergedAt } } } }" % PR_FIELDS
 Q_ONE = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { %s state mergedAt closedAt } } }" % PR_FIELDS
 
 
@@ -215,6 +216,7 @@ def main():
 
     cfg = load(CONFIG, {})
     stale_days = int(cfg.get("staleDays", 2))
+    merged_days = int(cfg.get("mergedDays", 5))
     try:
         logins = accounts()
     except Exception as e:
@@ -228,22 +230,30 @@ def main():
     def per_account(login):
         d = gql(envs[login], Q_MINE)
         r = gql(envs[login], Q_REVIEW)
-        return login, d["search"]["nodes"], r["search"]["nodes"]
+        since = (now() - timedelta(days=merged_days)).strftime("%Y-%m-%d")
+        m = gql(envs[login], Q_MERGED, q=f"is:pr is:merged author:@me merged:>={since} sort:updated-desc")
+        return login, d["search"]["nodes"], r["search"]["nodes"], m["search"]["nodes"]
 
-    prs, review = [], []
+    prs, review, merged = [], [], []
     with ThreadPoolExecutor(max_workers=6) as ex:
         futs = {l: ex.submit(per_account, l) for l in ok}
         watch_items = load(WATCH, [])
         wfut = [ex.submit(fetch_watch, i, ok, envs) for i in watch_items]
         for l, f in futs.items():
             try:
-                _, mine, rev = f.result()
+                _, mine, rev, mer = f.result()
             except Exception as e:
                 errors.append(f"{l}: {str(e)[:120]}"); failed.append(l); continue
             for n in mine:
                 if not n: continue
                 key, label = status(n)
                 d = base(n, l); d.update({"status": key, "label": label, "ci": ci_state(n)}); prs.append(d)
+            for n in mer:
+                if not n: continue
+                d = base(n, l)
+                d.update({"status": "mergeado", "label": "Mergeado", "mergedAt": n["mergedAt"],
+                          "mergedDaysAgo": days_since(n["mergedAt"])})
+                if (now() - datetime.fromisoformat(n["mergedAt"].replace("Z", "+00:00"))).days < merged_days: merged.append(d)
             for n in rev:
                 if not n: continue
                 d = base(n, l); d.update({"status": "review", "label": "Pide tu review"}); review.append(d)
@@ -253,13 +263,13 @@ def main():
     conf = jira_conf()
     if conf:
         keys = {}
-        for p in prs:
+        for p in prs + merged:
             k = TICKET.search(p["title"]) or TICKET.search(p["branch"].upper())
             p["ticket"] = k.group(1) if k else None
             if p["ticket"]: keys[p["ticket"]] = None
         with ThreadPoolExecutor(max_workers=6) as ex:
             for k, v in zip(keys, ex.map(lambda k: jira_status(conf, k), keys)): keys[k] = v
-        for p in prs: p["ticketStatus"] = keys.get(p["ticket"]) if p.get("ticket") else None
+        for p in prs + merged: p["ticketStatus"] = keys.get(p["ticket"]) if p.get("ticket") else None
     for p in prs: p["stale"] = p["status"] == "review" and p["idleDays"] >= stale_days
     for p in review: p["stale"] = p["idleDays"] >= stale_days
 
@@ -270,6 +280,7 @@ def main():
         for p in lst: top.setdefault(p["owner"], p["createdAt"])
         lst.sort(key=lambda p: (top[p["owner"]], p["createdAt"]), reverse=True)
     order(prs); order(review)
+    merged.sort(key=lambda p: p["mergedAt"], reverse=True)
 
     # Recordatorio diario de estancados (solo el widget consume el aviso)
     remind = []
@@ -281,7 +292,7 @@ def main():
             remind = [{"repo": p["repo"], "number": p["number"], "idleDays": p["idleDays"]} for p in stale]
             st["lastReminder"] = today; save(STATE, st)
 
-    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "review": review, "watching": watching,
-                      "remind": remind, "accounts": logins, "failed": failed, "jira": bool(conf), "staleDays": stale_days}))
+    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "review": review, "merged": merged, "watching": watching,
+                      "remind": remind, "accounts": logins, "failed": failed, "jira": bool(conf), "staleDays": stale_days, "mergedDays": merged_days}))
 
 main()

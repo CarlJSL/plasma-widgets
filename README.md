@@ -8,6 +8,7 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 - Al hacer clic se abre el panel con tres pestañas:
   - **Mis PRs:** tus PRs abiertos, agrupados por repo, con `#número título`, estado, ticket de Jira (si está configurado) y `rama → base`.
   - **Para revisar:** PRs de otros que te pidieron review, con su antigüedad.
+  - **Mergeados:** tus PRs mergeados en los últimos `mergedDays` días (5 por defecto), con cuándo se mergearon, a qué rama y el estado de su ticket.
   - **Seguimiento:** PRs ajenos de los que dependes. Pegas el link y una nota («cuando se mergee abro el mío») y el widget te avisa con una notificación cuando se hace merge o se cierra. Queda en la lista hasta que lo quites.
 - Clic en una fila abre el PR. Al pasar el mouse aparecen acciones: copiar link, abrir los checks (CI) y, en tus PRs observados o en re-review, **pedir re-review** a quienes ya revisaron.
 - **Estancados:** un PR esperando review sin actividad por `staleDays` o más (por defecto 2) se marca «sin movimiento N d» y recibes **un recordatorio diario** (después de las 9:00).
@@ -100,6 +101,7 @@ Archivo `~/.config/pr-tracker/config.json`:
 ```json
 {
   "staleDays": 2,
+  "mergedDays": 5,
   "jiraSite": "tuempresa.atlassian.net",
   "jiraEnv": "~/.config/pr-tracker/jira.env"
 }
