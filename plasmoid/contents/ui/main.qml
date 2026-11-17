@@ -109,6 +109,18 @@ PlasmoidItem {
     }
 
     property bool copied: false
+    property string selectedKey: "mine"
+
+    // "Para revisar" solo existe cuando alguien te está esperando.
+    readonly property var tabModel: {
+        const t = [{ key: "mine", title: "Mis PRs (" + prs.length + ")" }]
+        if (review.length > 0) t.push({ key: "review", title: "Para revisar (" + review.length + ")" })
+        t.push({ key: "watch", title: "Seguimiento (" + watching.length + ")" })
+        t.push({ key: "merged", title: "Mergeados (" + merged.length + ")" })
+        return t
+    }
+    // Si la pestaña elegida desaparece, volver a la primera.
+    readonly property string activeTab: tabModel.some(t => t.key === selectedKey) ? selectedKey : "mine"
 
     // Texto para pasarle a un revisor o al TL: qué necesita su review y qué ya está listo.
     function buildSummary() {
@@ -261,13 +273,18 @@ PlasmoidItem {
 
         RowLayout {
             Layout.fillWidth: true
-            PlasmaComponents.TabBar {
-                id: tabs
-                Layout.fillWidth: true
-                PlasmaComponents.TabButton { text: "Mis PRs (" + root.prs.length + ")" }
-                PlasmaComponents.TabButton { text: "Para revisar (" + root.review.length + ")" }
-                PlasmaComponents.TabButton { text: "Seguimiento (" + root.watching.length + ")" }
-                PlasmaComponents.TabButton { text: "Mergeados (" + root.merged.length + ")" }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 0
+                Repeater {
+                    model: root.tabModel
+                    delegate: PlasmaComponents.ToolButton {
+                        text: modelData.title
+                        highlighted: root.activeTab === modelData.key
+                        font.bold: highlighted
+                        onClicked: root.selectedKey = modelData.key
+                    }
+                }
+                Item { Layout.fillWidth: true }
             }
             PlasmaComponents.ToolButton {
                 icon.name: "view-refresh"; enabled: !root.loading
@@ -282,12 +299,13 @@ PlasmoidItem {
             color: Kirigami.Theme.negativeTextColor; text: root.errorMsg
         }
 
-        StackLayout {
+        Item {
             Layout.fillWidth: true; Layout.fillHeight: true
-            currentIndex: tabs.currentIndex
 
             // ---------- Mis PRs ----------
             ColumnLayout {
+                anchors.fill: parent
+                visible: root.activeTab === "mine"
                 RowLayout {
                     Layout.fillWidth: true
                     Item { Layout.fillWidth: true }
@@ -325,6 +343,8 @@ PlasmoidItem {
 
             // ---------- Para revisar ----------
             ColumnLayout {
+                anchors.fill: parent
+                visible: root.activeTab === "review"
                 PlasmaComponents.ScrollView {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     ListView {
@@ -347,6 +367,8 @@ PlasmoidItem {
 
             // ---------- Seguimiento ----------
             ColumnLayout {
+                anchors.fill: parent
+                visible: root.activeTab === "watch"
                 RowLayout {
                     Layout.fillWidth: true
                     PlasmaComponents.TextField { id: followUrl; Layout.fillWidth: true; Layout.preferredWidth: 3
@@ -387,6 +409,8 @@ PlasmoidItem {
 
             // ---------- Mergeados (últimos días) ----------
             ColumnLayout {
+                anchors.fill: parent
+                visible: root.activeTab === "merged"
                 PlasmaComponents.ScrollView {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     ListView {
