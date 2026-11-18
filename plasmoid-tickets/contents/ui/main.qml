@@ -25,6 +25,32 @@ PlasmoidItem {
         return m
     }
 
+    // Prefijo que comparten varios títulos ("[App] Lista de Difusión:"): se muestra una vez y se quita de las filas.
+    readonly property string commonPrefix: {
+        const c = {}
+        for (const t of visibleTickets) {
+            const i = t.summary.indexOf(":")
+            if (i > 0 && i <= 45) { const k = t.summary.substring(0, i); c[k] = (c[k] || 0) + 1 }
+        }
+        let best = "", n = 0
+        for (const k in c) if (c[k] > n) { best = k; n = c[k] }
+        return n >= 3 ? best : ""
+    }
+    function stripPrefix(text) {
+        if (commonPrefix !== "" && text.startsWith(commonPrefix + ":")) {
+            const r = text.substring(commonPrefix.length + 1).trim()
+            return r.charAt(0).toUpperCase() + r.substring(1)
+        }
+        return text
+    }
+    function cleanSummary(t) {
+        if (commonPrefix !== "" && t.summary.startsWith(commonPrefix + ":")) {
+            const r = t.summary.substring(commonPrefix.length + 1).trim()
+            return r.charAt(0).toUpperCase() + r.substring(1)
+        }
+        return t.summary
+    }
+
     readonly property var typeColor: ({ "Bug": "#e5484d", "Story": "#2da44e", "Epic": "#8957e5", "Pase a producción": "#2f81f7" })
     readonly property var typeGlyph: ({ "Bug": "!", "Story": "+", "Epic": "E", "Pase a producción": "↗" })
     function prioColor(p) {
@@ -65,11 +91,50 @@ PlasmoidItem {
             try {
                 const r = JSON.parse(data["stdout"])
                 root.errorMsg = r.error ? r.error : ""
-                if (!r.error) { root.tickets = r.tickets; root.notifyNew(r.tickets) }
+                if (!r.error) { root.tickets = r.tickets; root.blocks = r.blocks || []; root.notifyNew(r.tickets); root.notifyReady(root.blocks) }
             } catch (e) { root.errorMsg = data["stderr"] || String(e) }
         }
     }
     Timer { interval: 300000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refresh() }
+
+    // ---- bloqueos: "no puedo avanzar KEY hasta terminar OTRO" ----
+    property var blocks: []
+    property string tab: "tickets"
+    property string blockingKey: ""
+    property var ackedLocal: []
+    readonly property int readyCount: blocks.filter(b => b.blockerDone).length
+    readonly property string cli: "python3 $HOME/.local/bin/my-tickets"
+    readonly property var keyOptions: tickets.filter(t => t.key !== blockingKey).map(t => t.key + "   " + t.summary.substring(0, 60))
+
+    function startBlock(key) { blockingKey = key; tab = "tickets" }
+    function saveBlock(blockerText, note) {
+        const m = String(blockerText).toUpperCase().match(/[A-Z][A-Z0-9]+-\d+/)
+        if (!m) { showToast("Escribe la clave del ticket que bloquea (por ejemplo IN-1700)"); return }
+        runner.connectSource(cli + " block add " + q(blockingKey) + " " + q(m[0]) + " " + q(note) + " # " + Date.now())
+        blockingKey = ""
+    }
+    function unblock(key) { runner.connectSource(cli + " block rm " + q(key) + " # " + Date.now()) }
+
+    P5Support.DataSource {
+        id: runner
+        engine: "executable"
+        onNewData: (source, data) => {
+            disconnectSource(source)
+            const out = (data["stdout"] || "").trim()
+            if (source.indexOf(" block add ") >= 0) root.showToast(out || (data["stderr"] || "No se pudo guardar"))
+            if (source.indexOf(" block ack ") < 0) root.refresh()
+        }
+    }
+
+    function notifyReady(list) {
+        for (const b of list) {
+            if (b.blockerDone && !b.acked && !ackedLocal.includes(b.key)) {
+                ackedLocal = ackedLocal.concat([b.key])
+                notify("Ya puedes avanzar " + b.key, b.blocker + " terminó" + (b.note ? ". Tu nota: " + b.note : ""))
+                runner.connectSource(cli + " block ack " + q(b.key) + " # " + Date.now())
+            }
+        }
+    }
 
     // ---- copiar ----
     TextEdit { id: clip; visible: false }
@@ -90,12 +155,17 @@ PlasmoidItem {
             }
             out += "- " + t.key + " " + t.summary + "\n  " + t.url + "\n"
         }
+        if (blocks.length > 0) {
+            out += "\nBloqueados (" + blocks.length + ")\n"
+            for (const b of blocks)
+                out += "- " + b.key + " espera a " + b.blocker + " (" + b.blockerStatus + ")" + (b.note ? ": " + b.note : "") + "\n"
+        }
         return out.trim()
     }
 
     Plasmoid.icon: "view-task"
     toolTipMainText: "Mis tickets"
-    toolTipSubText: errorMsg !== "" ? "⚠ " + errorMsg : active.length + " activos, " + staleCount + " sin movimiento"
+    toolTipSubText: errorMsg !== "" ? "⚠ " + errorMsg : active.length + " activos, " + staleCount + " sin movimiento\n" + blocks.length + " bloqueados, " + readyCount + " ya se pueden avanzar"
 
     compactRepresentation: MouseArea {
         onClicked: root.expanded = !root.expanded
@@ -113,6 +183,17 @@ PlasmoidItem {
             color: "#d98e04"
             Text { anchors.centerIn: parent; text: "!"; color: "white"; font.bold: true
                 font.pixelSize: parent.height * 0.8; font.family: "DejaVu Sans" }
+        }
+        // Tickets bloqueados cuyo bloqueo ya se resolvió: ya puedes avanzarlos
+        Rectangle {
+            visible: root.readyCount > 0
+            anchors { left: parent.left; bottom: parent.bottom }
+            height: Math.max(14, parent.height * 0.5)
+            width: Math.max(height, readyText.implicitWidth + 4)
+            radius: height / 2
+            color: "#2da44e"
+            Text { id: readyText; anchors.centerIn: parent; text: root.readyCount
+                color: "white"; font.pixelSize: Math.max(10, parent.height * 0.72); font.bold: true; font.family: "DejaVu Sans" }
         }
         Rectangle {
             visible: root.active.length > 0
@@ -154,91 +235,162 @@ PlasmoidItem {
             color: Kirigami.Theme.negativeTextColor; text: root.errorMsg
         }
 
+        PlasmaComponents.TabBar {
+            Layout.fillWidth: true
+            PlasmaComponents.TabButton { text: "Mis tickets (" + root.active.length + ")"; onClicked: root.tab = "tickets" }
+            PlasmaComponents.TabButton { text: "Bloqueados (" + root.blocks.length + ")"; onClicked: root.tab = "blocked" }
+        }
+
+        // Formulario: marcar un ticket como bloqueado por otro
+        Rectangle {
+            visible: root.tab === "tickets" && root.blockingKey !== ""
+            Layout.fillWidth: true
+            implicitHeight: blockForm.implicitHeight + Kirigami.Units.largeSpacing * 2
+            radius: Kirigami.Units.cornerRadius
+            color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.07)
+            ColumnLayout {
+                id: blockForm
+                anchors { fill: parent; margins: Kirigami.Units.largeSpacing }
+                spacing: Kirigami.Units.smallSpacing
+                Kirigami.Heading { level: 5; Layout.fillWidth: true; elide: Text.ElideRight
+                    text: "No puedo avanzar " + root.blockingKey + " hasta terminar:" }
+                PlasmaComponents.ComboBox {
+                    id: blockerBox
+                    Layout.fillWidth: true; editable: true
+                    model: root.keyOptions
+                    currentIndex: -1
+                    editText: ""
+                }
+                PlasmaComponents.TextField {
+                    id: blockNote
+                    Layout.fillWidth: true
+                    placeholderText: "Nota (por qué depende)"
+                    onAccepted: saveBtn.clicked()
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    PlasmaComponents.Button { text: "Cancelar"; onClicked: { root.blockingKey = ""; blockNote.text = "" } }
+                    PlasmaComponents.Button {
+                        id: saveBtn
+                        text: "Guardar"; icon.name: "object-locked"
+                        onClicked: { root.saveBlock(blockerBox.editText, blockNote.text); blockNote.text = "" }
+                    }
+                }
+            }
+        }
+
+        PlasmaComponents.Label {
+            visible: root.tab === "tickets" && root.commonPrefix !== ""
+            Layout.fillWidth: true; elide: Text.ElideRight; opacity: 0.6; font: Kirigami.Theme.smallFont
+            text: root.commonPrefix + "  ·  prefijo omitido en los títulos"
+        }
+
         PlasmaComponents.CheckBox {
+            visible: root.tab === "tickets"
             text: "Incluir backlog y por hacer (" + (root.tickets.length - root.active.length) + ")"
             checked: root.showBacklog
             onToggled: root.showBacklog = checked
         }
 
         PlasmaComponents.ScrollView {
+            visible: root.tab === "tickets"
             Layout.fillWidth: true; Layout.fillHeight: true
             ListView {
                 model: root.visibleTickets
-                spacing: Kirigami.Units.smallSpacing
+                spacing: 0
                 section.property: "sec"
                 // "Tablero › Columna": la columna destacada y el tablero como contexto
                 section.delegate: RowLayout {
                     required property string section
                     width: ListView.view ? ListView.view.width : 0
                     Kirigami.Heading {
-                        level: 5; topPadding: Kirigami.Units.gridUnit * 0.6
-                        text: section.split(" › ")[1] + " (" + (root.statusCount[section] || 0) + ")"
+                        level: 4; topPadding: Kirigami.Units.gridUnit * 0.7; bottomPadding: Kirigami.Units.smallSpacing
+                        text: section.split(" › ")[1] + "  " + (root.statusCount[section] || 0)
                     }
                     Item { Layout.fillWidth: true }
                     PlasmaComponents.Label {
-                        Layout.topMargin: Kirigami.Units.gridUnit * 0.6
-                        text: section.split(" › ")[0]; opacity: 0.6; font: Kirigami.Theme.smallFont
+                        Layout.topMargin: Kirigami.Units.gridUnit * 0.7
+                        text: section.split(" › ")[0]; opacity: 0.55; font: Kirigami.Theme.smallFont
                     }
                 }
                 delegate: PlasmaComponents.ItemDelegate {
                     id: row
                     width: ListView.view.width
+                    topPadding: 6; bottomPadding: 6
                     onClicked: Qt.openUrlExternally(modelData.url)
                     HoverHandler { id: hh }
+                    // Filete fino entre filas
+                    Rectangle {
+                        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                        height: 1; color: Kirigami.Theme.textColor; opacity: 0.08
+                    }
                     contentItem: RowLayout {
-                        spacing: Kirigami.Units.smallSpacing
+                        spacing: Kirigami.Units.smallSpacing * 1.5
+                        // Barra de color por tipo: más discreta que un círculo por fila
                         Rectangle {
-                            Layout.alignment: Qt.AlignTop
-                            Layout.topMargin: 2
-                            Layout.preferredWidth: Kirigami.Units.iconSizes.smallMedium
-                            Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
-                            radius: width / 2
+                            Layout.fillHeight: true; Layout.preferredWidth: 3; radius: 2
                             color: root.typeColor[modelData.type] || "#8b949e"
-                            Text { anchors.centerIn: parent; text: root.typeGlyph[modelData.type] || "·"
-                                color: "white"; font.bold: true; font.pixelSize: parent.height * 0.7; font.family: "DejaVu Sans" }
                         }
+                        // Columna 1: clave, alineada en todas las filas
+                        PlasmaComponents.Label {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.preferredWidth: Kirigami.Units.gridUnit * 4.6
+                            text: modelData.key; font.bold: true; opacity: 0.9
+                            font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                        }
+                        // Columna 2: título
+                        PlasmaComponents.Label {
+                            Layout.fillWidth: true; Layout.alignment: Qt.AlignTop
+                            text: root.cleanSummary(modelData)
+                            wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+                        }
+                        // Columna 3: lo que merece atención, a la derecha
                         ColumnLayout {
-                            Layout.fillWidth: true; spacing: 1
-                            // Línea de contexto: clave, antigüedad y solo lo que merece atención
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: Kirigami.Units.smallSpacing
-                                PlasmaComponents.Label {
-                                    text: modelData.key; font.bold: true; font.pixelSize: Kirigami.Theme.smallFont.pixelSize
-                                    opacity: 0.85
-                                }
-                                PlasmaComponents.Label {
-                                    text: (modelData.idleDays === 0 ? "hoy" : "hace " + modelData.idleDays + " d")
-                                    opacity: 0.6; font: Kirigami.Theme.smallFont
-                                }
-                                Rectangle {
-                                    visible: modelData.priority === "Highest" || modelData.priority === "High"
-                                    radius: 3; color: root.prioColor(modelData.priority)
-                                    implicitWidth: prioText.implicitWidth + 8; implicitHeight: prioText.implicitHeight + 2
-                                    Text { id: prioText; anchors.centerIn: parent; text: modelData.priority; color: "white"
-                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
-                                }
-                                Rectangle {
-                                    visible: modelData.stale
-                                    radius: 3; color: "#d98e04"
-                                    implicitWidth: staleText.implicitWidth + 8; implicitHeight: staleText.implicitHeight + 2
-                                    Text { id: staleText; anchors.centerIn: parent; text: "sin movimiento"; color: "white"
-                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
-                                }
-                                Item { Layout.fillWidth: true }
-                            }
+                            Layout.alignment: Qt.AlignTop; spacing: 2
                             PlasmaComponents.Label {
-                                text: modelData.summary
-                                wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
-                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignRight
+                                text: (modelData.idleDays === 0 ? "hoy" : "hace " + modelData.idleDays + " d")
+                                opacity: 0.55; font: Kirigami.Theme.smallFont
+                            }
+                            Rectangle {
+                                Layout.alignment: Qt.AlignRight
+                                visible: modelData.priority === "Highest" || modelData.priority === "High"
+                                radius: 3; color: root.prioColor(modelData.priority)
+                                implicitWidth: prioText.implicitWidth + 8; implicitHeight: prioText.implicitHeight + 2
+                                Text { id: prioText; anchors.centerIn: parent; text: modelData.priority; color: "white"
+                                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
+                            }
+                            Rectangle {
+                                Layout.alignment: Qt.AlignRight
+                                visible: !!modelData.blockedBy
+                                radius: 3; color: "#8957e5"
+                                implicitWidth: blockedText.implicitWidth + 8; implicitHeight: blockedText.implicitHeight + 2
+                                Text { id: blockedText; anchors.centerIn: parent; text: "espera " + modelData.blockedBy; color: "white"
+                                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
+                            }
+                            Rectangle {
+                                Layout.alignment: Qt.AlignRight
+                                visible: modelData.stale
+                                radius: 3; color: "#d98e04"
+                                implicitWidth: staleText.implicitWidth + 8; implicitHeight: staleText.implicitHeight + 2
+                                Text { id: staleText; anchors.centerIn: parent; text: "sin movimiento"; color: "white"
+                                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
                             }
                         }
                         RowLayout {
                             spacing: 0
                             visible: hh.hovered
+                            Layout.alignment: Qt.AlignTop
                             PlasmaComponents.ToolButton {
                                 icon.name: "edit-copy"
                                 onClicked: { root.copyText(modelData.url); root.showToast("Link copiado") }
                                 PlasmaComponents.ToolTip { text: "Copiar link del ticket" }
+                            }
+                            PlasmaComponents.ToolButton {
+                                icon.name: "object-locked"
+                                onClicked: root.startBlock(modelData.key)
+                                PlasmaComponents.ToolTip { text: "Marcar como bloqueado por otro ticket" }
                             }
                             PlasmaComponents.ToolButton {
                                 icon.name: "tag"
@@ -251,9 +403,82 @@ PlasmoidItem {
             }
         }
         PlasmaComponents.Label {
-            visible: root.visibleTickets.length === 0
+            visible: root.tab === "tickets" && root.visibleTickets.length === 0
             Layout.alignment: Qt.AlignHCenter; text: root.loading ? "Cargando…" : "Sin tickets asignados"
         }
+        // ---------- Bloqueados ----------
+        PlasmaComponents.ScrollView {
+            visible: root.tab === "blocked"
+            Layout.fillWidth: true; Layout.fillHeight: true
+            ListView {
+                model: root.blocks
+                spacing: 0
+                delegate: PlasmaComponents.ItemDelegate {
+                    id: brow
+                    width: ListView.view.width
+                    topPadding: 8; bottomPadding: 8
+                    onClicked: Qt.openUrlExternally(modelData.blockerUrl)
+                    HoverHandler { id: bh }
+                    Rectangle {
+                        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                        height: 1; color: Kirigami.Theme.textColor; opacity: 0.08
+                    }
+                    contentItem: RowLayout {
+                        spacing: Kirigami.Units.smallSpacing * 1.5
+                        Rectangle {
+                            Layout.fillHeight: true; Layout.preferredWidth: 3; radius: 2
+                            color: modelData.blockerDone ? "#2da44e" : "#8957e5"
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
+                            RowLayout {
+                                Layout.fillWidth: true
+                                PlasmaComponents.Label { text: modelData.key; font.bold: true }
+                                PlasmaComponents.Label { text: "espera a"; opacity: 0.6 }
+                                PlasmaComponents.Label { text: modelData.blocker; font.bold: true }
+                                Item { Layout.fillWidth: true }
+                                Rectangle {
+                                    radius: 3; color: modelData.blockerDone ? "#2da44e" : "#8b949e"
+                                    implicitWidth: bstText.implicitWidth + 8; implicitHeight: bstText.implicitHeight + 2
+                                    Text { id: bstText; anchors.centerIn: parent; color: "white"; font.bold: true
+                                        font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.95
+                                        text: modelData.blockerDone ? "Terminado: ya puedes avanzar" : modelData.blockerStatus }
+                                }
+                            }
+                            PlasmaComponents.Label {
+                                Layout.fillWidth: true; elide: Text.ElideRight
+                                text: root.stripPrefix(modelData.blockerSummary)
+                            }
+                            PlasmaComponents.Label {
+                                Layout.fillWidth: true; elide: Text.ElideRight; opacity: 0.6; font: Kirigami.Theme.smallFont
+                                text: (modelData.note ? "Nota: " + modelData.note + "  ·  " : "")
+                                    + (modelData.daysBlocked === 0 ? "desde hoy" : "hace " + modelData.daysBlocked + " d")
+                            }
+                        }
+                        RowLayout {
+                            spacing: 0; visible: bh.hovered
+                            Layout.alignment: Qt.AlignTop
+                            PlasmaComponents.ToolButton {
+                                icon.name: "document-open"
+                                onClicked: Qt.openUrlExternally(modelData.url)
+                                PlasmaComponents.ToolTip { text: "Abrir " + modelData.key }
+                            }
+                            PlasmaComponents.ToolButton {
+                                icon.name: "edit-delete"
+                                onClicked: root.unblock(modelData.key)
+                                PlasmaComponents.ToolTip { text: "Ya no está bloqueado" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        PlasmaComponents.Label {
+            visible: root.tab === "blocked" && root.blocks.length === 0
+            Layout.alignment: Qt.AlignHCenter; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true; wrapMode: Text.Wrap
+            text: "Nada bloqueado. En «Mis tickets», pasa el mouse sobre uno y usa el candado para marcar de qué depende."
+        }
+
         PlasmaComponents.Label {
             visible: root.toast !== ""
             Layout.alignment: Qt.AlignHCenter; text: root.toast; opacity: 0.85

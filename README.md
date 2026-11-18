@@ -43,6 +43,7 @@ Segundo widget, independiente del de PRs, que usa la misma configuración de Jir
 - Backlog y «por hacer» ocultos por defecto (casilla para mostrarlos).
 - Marca como «sin movimiento» los que están en curso y llevan `ticketStaleDays` o más días sin actualizarse (3 por defecto); el contador del ícono se pone rojo si hay alguno.
 - Botón **Copiar resumen** con tus tickets activos por estado, para el daily.
+- **Bloqueados:** pasa el mouse sobre un ticket y usa el candado para marcar «no puedo avanzar este hasta terminar ese otro» (con una nota). La pestaña **Bloqueados** lista cada dependencia con el estado actual del ticket que bloquea; cuando ese ticket se termina, llega una notificación («Ya puedes avanzar X») y el ícono muestra un contador verde. El ticket bloqueante puede ser de cualquiera. Se guarda en `~/.local/share/pr-tracker/blocks.json` (no escribe nada en Jira). También entra en «Copiar resumen».
 - Notificación cuando te asignan un ticket nuevo.
 - Refresco cada 5 minutos. Clic en una fila abre el ticket.
 
@@ -137,6 +138,8 @@ El token se genera en [id.atlassian.com → Seguridad → API tokens](https://id
 El script también sirve desde la terminal:
 
 ```sh
+my-tickets block add <KEY> <BLOQUEADOR> [nota]   # KEY espera a BLOQUEADOR
+my-tickets block rm <KEY>
 my-prs | jq                          # JSON con todo
 my-prs watch add <URL> [nota]        # seguir un PR ajeno
 my-prs watch rm <URL>                # dejar de seguirlo
