@@ -4,7 +4,7 @@
 Lee ~/.config/pr-tracker/config.json (jiraSite, jiraEnv, ticketStaleDays) y las credenciales de jiraEnv
 (JIRA_EMAIL y JIRA_API_TOKEN). Imprime JSON.
 """
-import base64, json, re, sys
+import base64, json, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,17 +93,80 @@ def stage(status, cat):
     if re.search(r"ready|deploy|aprob|listo|release", s): return 4
     return 5
 
+def worktrees_dir(cfg):
+    return Path(os.path.expanduser(cfg.get("reviewDir", "~/Proyectos/worktrees")))
+
+def worktrees_cmd():
+    """worktrees: carpetas <repo>-<CLAVE>[-sufijo] de reviewDir, agrupadas por clave de ticket. Imprime JSON."""
+    try: cfg = json.loads(CONFIG.read_text())
+    except Exception: cfg = {}
+    found = {}
+    root = worktrees_dir(cfg)
+    if root.is_dir():
+        for d in sorted(root.iterdir()):
+            if not d.is_dir() or not (d / ".git").exists(): continue
+            m = re.search(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]+-\d+", d.name)
+            if not m or m.start() < 2: continue
+            found.setdefault(m.group(0), []).append({"repo": d.name[:m.start() - 1], "name": d.name[m.start():], "dir": str(d)})
+    out({"worktrees": found})
+
+def open_wt_cmd(repo, name):
+    """open-wt REPO NOMBRE: abre VS Code y una terminal con Claude en el worktree <repo>-<nombre>."""
+    try: cfg = json.loads(CONFIG.read_text())
+    except Exception: cfg = {}
+    d = worktrees_dir(cfg) / f"{repo}-{name}"
+    if not d.is_dir(): print("No existe " + str(d)); sys.exit(1)
+    quiet = dict(start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    editor = cfg.get("editor", "code")
+    try: subprocess.Popen([editor, str(d)], **quiet)
+    except FileNotFoundError: pass
+    term = cfg.get("terminal", "kitty")
+    shell_cmd = f"cd {json.dumps(str(d))} && git status --short --branch | head -1; exec {cfg.get('worktreeCmd', 'claude')}"
+    subprocess.Popen([term, "sh", "-c", shell_cmd] if term == "kitty" else [term, "-e", "sh", "-c", shell_cmd], **quiet)
+    print(f"Abierto {repo}-{name}")
+
+def connect():
+    cfg = json.loads(CONFIG.read_text())
+    site = cfg["jiraSite"]
+    env = {}
+    for line in Path(cfg.get("jiraEnv", "~/.config/pr-tracker/jira.env")).expanduser().read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1); env[k.strip()] = v.strip().strip("'\"")
+    auth = "Basic " + base64.b64encode(f"{env['JIRA_EMAIL']}:{env['JIRA_API_TOKEN']}".encode()).decode()
+    return cfg, site, auth
+
+def search_cmd(text):
+    """search TEXTO: tickets de Jira por clave (IN-1700) o por palabras del título. Imprime JSON."""
+    text = text.strip()
+    try:
+        _, site, auth = connect()
+        clauses = []
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9]+-\d+", text): clauses.append(f'key = "{text.upper()}"')
+        words = [re.sub(r'[^\w-]', "", w) for w in text.split()]
+        words = [w for w in words if len(w) >= 2]
+        if words: clauses.append("(" + " AND ".join(f'summary ~ "{w}*"' for w in words) + ")")
+        if not clauses: out({"q": text, "results": []}); return
+        body = {"jql": "(" + " OR ".join(clauses) + ") ORDER BY updated DESC", "maxResults": 8,
+                "fields": ["summary", "status", "project", "assignee"]}
+        req = urlrequest.Request(f"https://{site}/rest/api/3/search/jql", data=json.dumps(body).encode(),
+            headers={"Authorization": auth, "Content-Type": "application/json", "Accept": "application/json"})
+        with urlrequest.urlopen(req, timeout=20) as r: d = json.loads(r.read())
+        out({"q": text, "results": [{"key": i["key"], "url": f"https://{site}/browse/{i['key']}", "summary": i["fields"]["summary"], "status": i["fields"]["status"]["name"],
+                                      "assignee": (i["fields"].get("assignee") or {}).get("displayName", "")} for i in d["issues"]]})
+    except Exception as e:
+        out({"q": text, "results": [], "error": str(e)[:120]})
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "block":
         block_cmd(sys.argv[2:]); return
+    if len(sys.argv) > 1 and sys.argv[1] == "worktrees":
+        worktrees_cmd(); return
+    if len(sys.argv) > 3 and sys.argv[1] == "open-wt":
+        open_wt_cmd(sys.argv[2], sys.argv[3]); return
+    if len(sys.argv) > 2 and sys.argv[1] == "search":
+        search_cmd(" ".join(sys.argv[2:])); return
     try:
-        cfg = json.loads(CONFIG.read_text())
-        site = cfg["jiraSite"]
-        env = {}
-        for line in Path(cfg.get("jiraEnv", "~/.config/pr-tracker/jira.env")).expanduser().read_text().splitlines():
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1); env[k.strip()] = v.strip().strip("'\"")
-        auth = "Basic " + base64.b64encode(f"{env['JIRA_EMAIL']}:{env['JIRA_API_TOKEN']}".encode()).decode()
+        cfg, site, auth = connect()
     except Exception:
         out({"error": "Falta configurar Jira (jiraSite y jiraEnv en ~/.config/pr-tracker/config.json)", "tickets": []}); return
     stale_days = int(cfg.get("ticketStaleDays", 3))

@@ -7,6 +7,7 @@ Uso:
   my-prs watch rm URL               dejar de seguirlo
   my-prs watch ack URL              marcar como avisado (lo usa el widget)
   my-prs rereview CUENTA URL        pedir re-review a quienes ya revisaron el PR
+  my-prs codereview CUENTA URL otros|mio   code review con IA (otros: agente de `harnessDir` si existe; mio: autorreview en tu worktree)
   my-prs review CUENTA URL [code|term]  preparar un worktree del PR y abrirlo para leer el código
                                     (list: solo imprime el orden; git: abre solo la carpeta para usar Control de código fuente; code: VS Code con los archivos sin ver, en orden de lectura;
                                      term: diff en la terminal con delta, en el mismo orden)
@@ -327,10 +328,8 @@ def find_clone(owner, repo, cfg):
         sh(["git", "clone", "--filter=blob:none", f"https://github.com/{owner}/{repo}.git", str(dest)], timeout=300)
     return dest
 
-def review_cmd(args):
-    login, url = args[0], args[1]
-    mode = args[2] if len(args) > 2 else "code"
-    cfg = load(CONFIG, {})
+def prepare_wt(login, url, cfg):
+    """Deja el PR listo en un worktree: el tuyo si la rama ya está abierta, o uno nuevo en reviewDir."""
     o, r, n = parse_url(url)
     env = env_for(login)
     pr = gql(env, Q_FILES, o=o, r=r, n=n)["repository"]["pullRequest"]
@@ -350,6 +349,41 @@ def review_cmd(args):
         wt = Path(os.path.expanduser(cfg.get("reviewDir", "~/Proyectos/worktrees"))) / f"{r}-pr{n}"
         if wt.exists(): sh(["git", "-C", str(wt), "checkout", "-q", "--detach", head])
         else: sh(g + ["worktree", "add", "-q", "--detach", str(wt), head], timeout=120)
+    return o, r, n, pr, base, wt
+
+def launch_terminal(cfg, cwd, command):
+    """Abre una terminal en cwd que ejecuta `command` (y se queda abierta mientras dure)."""
+    term = cfg.get("terminal", "kitty")
+    sh_cmd = f"cd {json.dumps(str(cwd))} && exec {command}"
+    argv = [term, "sh", "-c", sh_cmd] if term == "kitty" else [term, "-e", "sh", "-c", sh_cmd]
+    if os.environ.get("PR_TRACKER_DRY"): print("DRY:", sh_cmd); return
+    subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def codereview_cmd(args):
+    """codereview CUENTA URL otros|mio
+    otros: si hay `harnessDir`, sesión de Claude ahí con el agente `reviewAgent` (prepara un borrador; tú apruebas cada
+           publicación); si no, prepara el PR en un worktree y corre el review integrado de Claude Code.
+    mio:   autorreview de tu propio PR en el worktree de su rama (`selfReviewPrompt`); no publica nada."""
+    login, url, who = args[0], args[1], args[2] if len(args) > 2 else "otros"
+    cfg = load(CONFIG, {})
+    self_prompt = cfg.get("selfReviewPrompt", "/code-review")
+    harness = cfg.get("harnessDir")
+    if who != "mio" and harness:
+        o, r, n = parse_url(url)
+        harness = Path(os.path.expanduser(harness))
+        if not harness.is_dir(): print(f"No existe harnessDir: {harness}"); sys.exit(1)
+        agent = cfg.get("reviewAgent", "review")
+        launch_terminal(cfg, harness, f"claude --agent {agent} " + json.dumps(f"Revisa el PR {o}/{r}#{n} ({url})"))
+    else:
+        o, r, n, pr, base, wt = prepare_wt(login, url, cfg)
+        launch_terminal(cfg, wt, "claude " + json.dumps(self_prompt))
+    print(f"Code review de #{n} abierto en la terminal")
+
+def review_cmd(args):
+    login, url = args[0], args[1]
+    mode = args[2] if len(args) > 2 else "code"
+    cfg = load(CONFIG, {})
+    o, r, n, pr, base, wt = prepare_wt(login, url, cfg)
     changed = [f for f in sh(["git", "-C", str(wt), "diff", "--name-only", f"origin/{base}...HEAD"]).splitlines() if f]
     ordered = reading_order(changed)
     viewed = {f["path"] for f in pr["files"]["nodes"] if f["viewerViewedState"] == "VIEWED"}
@@ -390,6 +424,13 @@ def main():
             print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
         return
 
+    if argv and argv[0] == "codereview":
+        try: codereview_cmd(argv[1:])
+        except subprocess.CalledProcessError as e:
+            print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
+        except Exception as e:
+            print("Error: " + str(e)[:200]); sys.exit(1)
+        return
     if argv and argv[0] == "review":
         try: review_cmd(argv[1:])
         except subprocess.CalledProcessError as e:

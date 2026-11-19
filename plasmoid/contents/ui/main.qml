@@ -193,6 +193,10 @@ PlasmoidItem {
         showToast("Preparando el código…")
         runner.connectSource(cli + " review " + q(account) + " " + q(url) + " " + mode + " # " + Date.now())
     }
+    function codeReview(account, url, who) {
+        showToast("Abriendo la sesión de Claude…")
+        runner.connectSource(cli + " codereview " + q(account) + " " + q(url) + " " + who + " # " + Date.now())
+    }
     function follow(url, note) {
         runner.connectSource(cli + " watch add " + q(url) + " " + q(note) + " # " + Date.now())
     }
@@ -209,6 +213,7 @@ PlasmoidItem {
             const out = (data["stdout"] || data["stderr"] || "").trim()
             if (source.indexOf(" rereview ") >= 0) { root.showToast(out); }
             else if (source.indexOf(" review ") >= 0) { root.showToast(out); }
+            else if (source.indexOf(" codereview ") >= 0) { root.showToast(out); }
             else if (source.indexOf(" watch add ") >= 0) { root.showToast(out.startsWith("Siguiendo") ? "Siguiendo PR" : (out || "No se pudo seguir")); root.refresh() }
             else if (source.indexOf(" watch rm ") >= 0) root.refresh()
         }
@@ -403,6 +408,8 @@ PlasmoidItem {
                             subtitle: root.subtitleOf(modelData)
                             showReReview: modelData.label.indexOf("re-review") >= 0 || modelData.status === "observado"
                             showReview: true
+                            codeReviewTip: "Autorreview con IA en el worktree de tu rama (no publica nada)"
+                            onCodeReview: (account, url) => root.codeReview(account, url, "mio")
                             onReviewCode: (account, url) => root.reviewCode(account, url, "git")
                             onReviewTerm: (account, url) => root.reviewCode(account, url, "term")
                             onCopyLink: url => root.copyLink(url)
@@ -432,6 +439,8 @@ PlasmoidItem {
                             subtitle: "de " + modelData.author + "  ·  " + modelData.repo + "  ·  hace " + modelData.ageDays + " d"
                                 + (modelData.filesTotal > 0 ? "  ·  visto " + modelData.filesViewed + "/" + modelData.filesTotal : "")
                             showReview: true
+                            codeReviewTip: "Code review con IA en una sesión de Claude (el borrador lo apruebas tú; no publica nada solo)"
+                            onCodeReview: (account, url) => root.codeReview(account, url, "otros")
                             onReviewCode: (account, url) => root.reviewCode(account, url, "code")
                             onReviewTerm: (account, url) => root.reviewCode(account, url, "term")
                             onCopyLink: url => root.copyLink(url)

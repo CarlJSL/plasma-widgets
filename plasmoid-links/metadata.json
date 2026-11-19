@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "io.personal.linkbox",
+    "Name": "Mis links",
+    "Description": "Links guardados con acceso rápido: filtra, Enter y se abre",
+    "Icon": "bookmarks",
+    "Authors": [{ "Name": "CarlJSL" }],
+    "Category": "Utilities",
+    "License": "MIT",
+    "Version": "1.0"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}

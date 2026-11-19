@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls as QQC2
 import org.kde.plasma.plasmoid
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.plasma.plasma5support as P5Support
@@ -17,7 +18,22 @@ PlasmoidItem {
     readonly property string cmd: "python3 $HOME/.local/bin/my-tickets"
 
     readonly property var active: tickets.filter(t => t.cat !== "new")
-    readonly property var visibleTickets: showBacklog ? tickets : active
+    // Buscador de la lista: tus tickets que coinciden + resultados del resto de Jira
+    property string findQuery: ""
+    property string findSearched: ""
+    property var findResults: []
+    property bool finding: false
+    readonly property var visibleTickets: {
+        const t = findQuery.trim().toLowerCase()
+        if (t === "") return showBacklog ? tickets : active
+        const mine = tickets.filter(x => (x.key + " " + x.summary).toLowerCase().indexOf(t) >= 0)
+        const have = {}
+        mine.forEach(x => have[x.key] = true)
+        const more = findSearched === findQuery.trim() ? findResults.filter(r => !have[r.key]).map(r => ({
+            key: r.key, summary: r.summary, status: r.status, type: "", cat: "", url: r.url, idleDays: -1, priority: "",
+            stale: false, blockedBy: "", sec: "Jira › Otros resultados", remote: true })) : []
+        return mine.concat(more)
+    }
     readonly property int staleCount: active.filter(t => t.stale).length
     readonly property var statusCount: {
         const m = {}
@@ -104,14 +120,84 @@ PlasmoidItem {
     property var ackedLocal: []
     readonly property int readyCount: blocks.filter(b => b.blockerDone).length
     readonly property string cli: "python3 $HOME/.local/bin/my-tickets"
-    readonly property var keyOptions: tickets.filter(t => t.key !== blockingKey).map(t => t.key + "   " + t.summary.substring(0, 60))
+    // Worktrees por ticket (carpetas <repo>-<CLAVE>[-sufijo]) y búsqueda en Jira de la lista
+    property var worktrees: ({})
+    function loadWts() { wtSrc.connectSource(cli + " worktrees # " + Date.now()) }
+    P5Support.DataSource {
+        id: wtSrc
+        engine: "executable"
+        onNewData: (source, data) => {
+            disconnectSource(source)
+            try { root.worktrees = JSON.parse(data["stdout"]).worktrees } catch (e) {}
+        }
+    }
+    function queueFind(text) {
+        findQuery = text
+        if (text.trim().length >= 2) { finding = true; findTimer.restart() } else { finding = false; findResults = []; findSearched = "" }
+    }
+    Timer { id: findTimer; interval: 400; onTriggered: finder.connectSource(root.cli + " search " + root.q(root.findQuery.trim()) + " # " + Date.now()) }
+    P5Support.DataSource {
+        id: finder
+        engine: "executable"
+        onNewData: (source, data) => {
+            disconnectSource(source)
+            try {
+                const r = JSON.parse(data["stdout"])
+                if (r.q === root.findQuery.trim()) { root.findResults = r.results; root.findSearched = r.q; root.finding = false }
+            } catch (e) { root.finding = false }
+        }
+    }
+    function openWt(repo, name) { runner.connectSource(cli + " open-wt " + q(repo) + " " + q(name) + " # " + Date.now()); showToast("Abriendo " + repo + "-" + name + "…") }
+    function wtCommand(repo, name) { return "wt " + repo + " " + name }
+    Component.onCompleted: loadWts()
+    onExpandedChanged: if (expanded) loadWts()
 
-    function startBlock(key) { blockingKey = key; tab = "tickets" }
-    function saveBlock(blockerText, note) {
-        const m = String(blockerText).toUpperCase().match(/[A-Z][A-Z0-9]+-\d+/)
-        if (!m) { showToast("Escribe la clave del ticket que bloquea (por ejemplo IN-1700)"); return }
+    // Buscador del ticket que bloquea: tus tickets al instante + resultados de Jira
+    property string blockerKey: ""
+    property string blockerLabel: ""
+    property string blockerQuery: ""
+    property string searchedFor: ""
+    property var remoteResults: []
+    property bool searching: false
+    readonly property var suggestions: {
+        const t = blockerQuery.trim().toLowerCase()
+        const seen = {}
+        const out = []
+        const add = x => { if (x.key !== blockingKey && !seen[x.key]) { seen[x.key] = true; out.push(x) } }
+        tickets.filter(x => t === "" || (x.key + " " + x.summary).toLowerCase().indexOf(t) >= 0)
+               .forEach(x => add({ key: x.key, summary: x.summary, status: x.status, mine: true }))
+        if (searchedFor === blockerQuery.trim()) remoteResults.forEach(add)
+        return out.slice(0, 7)
+    }
+    function queueSearch(text) {
+        blockerQuery = text
+        if (text.trim().length >= 2) { searching = true; searchTimer.restart() } else { searching = false; remoteResults = []; searchedFor = "" }
+    }
+    Timer {
+        id: searchTimer; interval: 400
+        onTriggered: searcher.connectSource(root.cli + " search " + root.q(root.blockerQuery.trim()) + " # " + Date.now())
+    }
+    P5Support.DataSource {
+        id: searcher
+        engine: "executable"
+        onNewData: (source, data) => {
+            disconnectSource(source)
+            try {
+                const r = JSON.parse(data["stdout"])
+                if (r.q === root.blockerQuery.trim()) { root.remoteResults = r.results; root.searchedFor = r.q; root.searching = false }
+            } catch (e) { root.searching = false }
+        }
+    }
+    function pickBlocker(x) { blockerKey = x.key; blockerLabel = x.key + "   " + x.summary }
+    function resetBlocker() { blockerKey = ""; blockerLabel = ""; blockerQuery = ""; searchedFor = ""; remoteResults = []; searching = false }
+
+    function startBlock(key) { resetBlocker(); blockingKey = key; tab = "tickets" }
+    function saveBlock(note) {
+        const text = blockerKey !== "" ? blockerKey : blockerQuery
+        const m = String(text).toUpperCase().match(/[A-Z][A-Z0-9]+-\d+/)
+        if (!m) { showToast("Elige un ticket de la lista o escribe su clave (por ejemplo IN-1700)"); return }
         runner.connectSource(cli + " block add " + q(blockingKey) + " " + q(m[0]) + " " + q(note) + " # " + Date.now())
-        blockingKey = ""
+        blockingKey = ""; resetBlocker()
     }
     function unblock(key) { runner.connectSource(cli + " block rm " + q(key) + " # " + Date.now()) }
 
@@ -121,6 +207,7 @@ PlasmoidItem {
         onNewData: (source, data) => {
             disconnectSource(source)
             const out = (data["stdout"] || "").trim()
+            if (source.indexOf(" open-wt ") >= 0) { if (!out.startsWith("Abierto")) root.showToast(out || data["stderr"] || "No se pudo abrir"); return }
             if (source.indexOf(" block add ") >= 0) root.showToast(out || (data["stderr"] || "No se pudo guardar"))
             if (source.indexOf(" block ack ") < 0) root.refresh()
         }
@@ -254,12 +341,49 @@ PlasmoidItem {
                 spacing: Kirigami.Units.smallSpacing
                 Kirigami.Heading { level: 5; Layout.fillWidth: true; elide: Text.ElideRight
                     text: "No puedo avanzar " + root.blockingKey + " hasta terminar:" }
-                PlasmaComponents.ComboBox {
-                    id: blockerBox
-                    Layout.fillWidth: true; editable: true
-                    model: root.keyOptions
-                    currentIndex: -1
-                    editText: ""
+                PlasmaComponents.TextField {
+                    id: blockerSearch
+                    visible: root.blockerKey === ""
+                    Layout.fillWidth: true
+                    placeholderText: "Buscar ticket por clave o texto (ej.: IN-1700 o «lista difusión»)"
+                    text: root.blockerQuery
+                    onTextChanged: if (text !== root.blockerQuery) root.queueSearch(text)
+                    onVisibleChanged: if (visible) forceActiveFocus()
+                    Connections { target: root; function onBlockerQueryChanged() { if (blockerSearch.text !== root.blockerQuery) blockerSearch.text = root.blockerQuery } }
+                    Keys.onReturnPressed: if (root.suggestions.length > 0) root.pickBlocker(root.suggestions[0])
+                    Keys.onEnterPressed: if (root.suggestions.length > 0) root.pickBlocker(root.suggestions[0])
+                }
+                RowLayout {
+                    visible: root.blockerKey !== ""
+                    Layout.fillWidth: true
+                    PlasmaComponents.Label { Layout.fillWidth: true; elide: Text.ElideRight; font.bold: true; text: root.blockerLabel }
+                    PlasmaComponents.ToolButton {
+                        icon.name: "edit-clear"
+                        onClicked: root.resetBlocker()
+                        PlasmaComponents.ToolTip { text: "Elegir otro ticket" }
+                    }
+                }
+                Repeater {
+                    model: root.blockerKey === "" ? root.suggestions : []
+                    delegate: PlasmaComponents.ItemDelegate {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        onClicked: root.pickBlocker(modelData)
+                        contentItem: RowLayout {
+                            spacing: Kirigami.Units.smallSpacing
+                            PlasmaComponents.Label { text: modelData.key; font.bold: true; Layout.preferredWidth: Kirigami.Units.gridUnit * 4.5 }
+                            PlasmaComponents.Label { text: modelData.summary; elide: Text.ElideRight; Layout.fillWidth: true }
+                            PlasmaComponents.Label { text: modelData.status; opacity: 0.6; font: Kirigami.Theme.smallFont }
+                        }
+                    }
+                }
+                PlasmaComponents.Label {
+                    visible: root.blockerKey === "" && root.searching
+                    opacity: 0.6; font: Kirigami.Theme.smallFont; text: "Buscando en Jira…"
+                }
+                PlasmaComponents.Label {
+                    visible: root.blockerKey === "" && !root.searching && root.blockerQuery.trim().length >= 2 && root.suggestions.length === 0
+                    opacity: 0.6; font: Kirigami.Theme.smallFont; text: "Sin resultados. Prueba con la clave completa (IN-1700)."
                 }
                 PlasmaComponents.TextField {
                     id: blockNote
@@ -270,11 +394,11 @@ PlasmoidItem {
                 RowLayout {
                     Layout.fillWidth: true
                     Item { Layout.fillWidth: true }
-                    PlasmaComponents.Button { text: "Cancelar"; onClicked: { root.blockingKey = ""; blockNote.text = "" } }
+                    PlasmaComponents.Button { text: "Cancelar"; onClicked: { root.blockingKey = ""; root.resetBlocker(); blockNote.text = "" } }
                     PlasmaComponents.Button {
                         id: saveBtn
                         text: "Guardar"; icon.name: "object-locked"
-                        onClicked: { root.saveBlock(blockerBox.editText, blockNote.text); blockNote.text = "" }
+                        onClicked: { root.saveBlock(blockNote.text); blockNote.text = "" }
                     }
                 }
             }
@@ -291,6 +415,54 @@ PlasmoidItem {
             text: "Incluir backlog y por hacer (" + (root.tickets.length - root.active.length) + ")"
             checked: root.showBacklog
             onToggled: root.showBacklog = checked
+        }
+
+        QQC2.Popup {
+            id: wtPopup
+            property string key: ""
+            readonly property var items: root.worktrees[key] || []
+            x: parent ? parent.width - width : 0
+            function openFor(k, anchor) { key = k; parent = anchor; y = anchor.height; open() }
+            padding: Kirigami.Units.smallSpacing
+            closePolicy: QQC2.Popup.CloseOnEscape | QQC2.Popup.CloseOnPressOutside
+            contentItem: ColumnLayout {
+                spacing: Kirigami.Units.smallSpacing
+                PlasmaComponents.Label { text: "Worktrees de " + wtPopup.key; font.bold: true }
+                Repeater {
+                    model: wtPopup.items
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+                        PlasmaComponents.Label { Layout.fillWidth: true; Layout.minimumWidth: Kirigami.Units.gridUnit * 14
+                            text: modelData.repo + "  ·  " + modelData.name; elide: Text.ElideRight }
+                        PlasmaComponents.ToolButton {
+                            icon.name: "utilities-terminal"; text: "Abrir"
+                            onClicked: { root.openWt(modelData.repo, modelData.name); wtPopup.close() }
+                            PlasmaComponents.ToolTip { text: "Abrir VS Code y una terminal con Claude en este worktree" }
+                        }
+                        PlasmaComponents.ToolButton {
+                            icon.name: "edit-copy"
+                            onClicked: { root.copyText(root.wtCommand(modelData.repo, modelData.name)); root.showToast("Comando copiado"); wtPopup.close() }
+                            PlasmaComponents.ToolTip { text: "Copiar: " + root.wtCommand(modelData.repo, modelData.name) }
+                        }
+                    }
+                }
+            }
+        }
+
+        PlasmaComponents.TextField {
+            id: findField
+            visible: root.tab === "tickets"
+            Layout.fillWidth: true
+            placeholderText: "Buscar ticket por clave o texto (también en el resto de Jira)…"
+            text: root.findQuery
+            onTextChanged: if (text !== root.findQuery) root.queueFind(text)
+            Keys.onEscapePressed: root.queueFind("")
+        }
+        PlasmaComponents.Label {
+            visible: root.tab === "tickets" && root.finding
+            opacity: 0.6; font: Kirigami.Theme.smallFont; text: "Buscando en Jira…"
         }
 
         PlasmaComponents.ScrollView {
@@ -350,8 +522,22 @@ PlasmoidItem {
                             Layout.alignment: Qt.AlignTop; spacing: 2
                             PlasmaComponents.Label {
                                 Layout.alignment: Qt.AlignRight
+                                visible: modelData.idleDays >= 0
                                 text: (modelData.idleDays === 0 ? "hoy" : "hace " + modelData.idleDays + " d")
                                 opacity: 0.55; font: Kirigami.Theme.smallFont
+                            }
+                            PlasmaComponents.Label {
+                                Layout.alignment: Qt.AlignRight
+                                visible: !!modelData.remote
+                                text: modelData.status; opacity: 0.55; font: Kirigami.Theme.smallFont
+                            }
+                            Rectangle {
+                                Layout.alignment: Qt.AlignRight
+                                visible: !!root.worktrees[modelData.key]
+                                radius: 3; color: Kirigami.Theme.textColor; opacity: 0.55
+                                implicitWidth: wtText.implicitWidth + 8; implicitHeight: wtText.implicitHeight + 2
+                                Text { id: wtText; anchors.centerIn: parent; text: "worktree " + (root.worktrees[modelData.key] || []).length
+                                    color: Kirigami.Theme.backgroundColor; font.pixelSize: Kirigami.Theme.smallFont.pixelSize * 0.9; font.bold: true }
                             }
                             Rectangle {
                                 Layout.alignment: Qt.AlignRight
@@ -383,6 +569,12 @@ PlasmoidItem {
                             visible: hh.hovered
                             Layout.alignment: Qt.AlignTop
                             PlasmaComponents.ToolButton {
+                                visible: !!root.worktrees[modelData.key]
+                                icon.name: "folder-open"
+                                onClicked: wtPopup.openFor(modelData.key, this)
+                                PlasmaComponents.ToolTip { text: "Worktrees de este ticket (" + (root.worktrees[modelData.key] || []).length + ")" }
+                            }
+                            PlasmaComponents.ToolButton {
                                 icon.name: "edit-copy"
                                 onClicked: { root.copyText(modelData.url); root.showToast("Link copiado") }
                                 PlasmaComponents.ToolTip { text: "Copiar link del ticket" }
@@ -404,7 +596,7 @@ PlasmoidItem {
         }
         PlasmaComponents.Label {
             visible: root.tab === "tickets" && root.visibleTickets.length === 0
-            Layout.alignment: Qt.AlignHCenter; text: root.loading ? "Cargando…" : "Sin tickets asignados"
+            Layout.alignment: Qt.AlignHCenter; text: root.loading ? "Cargando…" : (root.findQuery.trim() !== "" ? "Sin resultados" : "Sin tickets asignados")
         }
         // ---------- Bloqueados ----------
         PlasmaComponents.ScrollView {

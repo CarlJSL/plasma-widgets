@@ -13,6 +13,7 @@ PlasmaComponents.ItemDelegate {
     property string subtitle: ""
     property bool showReReview: false
     property bool showReview: false
+    property string codeReviewTip: ""
     property bool alwaysShowActions: false
     property string extraIcon: ""
     property string extraTip: ""
@@ -23,6 +24,7 @@ PlasmaComponents.ItemDelegate {
     signal extra(string url)
     signal reviewCode(string account, string url)
     signal reviewTerm(string account, string url)
+    signal codeReview(string account, string url)
 
     onClicked: Qt.openUrlExternally(pr.url)
     HoverHandler { id: hh }
@@ -80,6 +82,11 @@ PlasmaComponents.ItemDelegate {
                 visible: row.showReview
                 icon.name: "utilities-terminal"; onClicked: row.reviewTerm(row.pr.account, row.pr.url)
                 PlasmaComponents.ToolTip { text: "Ver el diff en la terminal (delta, en orden de lectura)" }
+            }
+            PlasmaComponents.ToolButton {
+                visible: row.codeReviewTip !== ""
+                icon.name: "dialog-ok-apply"; onClicked: row.codeReview(row.pr.account, row.pr.url)
+                PlasmaComponents.ToolTip { text: row.codeReviewTip }
             }
             PlasmaComponents.ToolButton {
                 visible: row.showReReview

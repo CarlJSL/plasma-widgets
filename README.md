@@ -1,6 +1,6 @@
 # pr-tracker
 
-Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos** de GitHub con su estado, para no perder links ni saber cuál es cuál. Solo PRs abiertos: los mergeados desaparecen solos.
+Widgets de **KDE Plasma 6** para el día a día de desarrollo: **Mis PRs** (tus pull requests abiertos de GitHub con su estado, para no perder links ni saber cuál es cuál), **Mis tickets** (Jira, por columna del tablero, con bloqueos) y **Mis links** (links guardados con acceso rápido).
 
 ## Qué hace
 
@@ -43,11 +43,23 @@ Segundo widget, independiente del de PRs, que usa la misma configuración de Jir
 - Backlog y «por hacer» ocultos por defecto (casilla para mostrarlos).
 - Marca como «sin movimiento» los que están en curso y llevan `ticketStaleDays` o más días sin actualizarse (3 por defecto); el contador del ícono se pone rojo si hay alguno.
 - Botón **Copiar resumen** con tus tickets activos por estado, para el daily.
-- **Bloqueados:** pasa el mouse sobre un ticket y usa el candado para marcar «no puedo avanzar este hasta terminar ese otro» (con una nota). La pestaña **Bloqueados** lista cada dependencia con el estado actual del ticket que bloquea; cuando ese ticket se termina, llega una notificación («Ya puedes avanzar X») y el ícono muestra un contador verde. El ticket bloqueante puede ser de cualquiera. Se guarda en `~/.local/share/pr-tracker/blocks.json` (no escribe nada en Jira). También entra en «Copiar resumen».
+- **Bloqueados:** pasa el mouse sobre un ticket y usa el candado para marcar «no puedo avanzar este hasta terminar ese otro» (con una nota). El formulario trae un **buscador**: escribes la clave (`IN-1700`) o palabras del título y busca en todo Jira (tus tickets salen al instante, el resto tras ~0,4 s); eliges el resultado con un clic o con Enter para el primero. La pestaña **Bloqueados** lista cada dependencia con el estado actual del ticket que bloquea; cuando ese ticket se termina, llega una notificación («Ya puedes avanzar X») y el ícono muestra un contador verde. El ticket bloqueante puede ser de cualquiera. Se guarda en `~/.local/share/pr-tracker/blocks.json` (no escribe nada en Jira). También entra en «Copiar resumen».
+- **Buscador de la lista:** arriba de los tickets. Escribes una clave o palabras del título: filtra tus tickets al instante y, tras ~0,4 s, agrega en «Jira › Otros resultados» los tickets del resto de Jira (también con sus botones).
+- **Worktrees por ticket:** si en `reviewDir` (por defecto `~/Proyectos/worktrees`) hay carpetas con el formato `<repo>-<CLAVE>[-sufijo]` (por ejemplo `api-investor-io-IN-1588-tanda2`), la fila muestra la etiqueta «worktree N» y un botón de carpeta que lista cada uno con dos acciones: **Abrir** (VS Code y una terminal con Claude en ese worktree) y **copiar el comando** `wt <repo> <nombre>` (la función de fish del apartado «Revisar el código»). Si el ticket no tiene worktree, el botón no aparece.
 - Notificación cuando te asignan un ticket nuevo.
 - Refresco cada 5 minutos. Clic en una fila abre el ticket.
 
 Requiere `jiraSite` y `jiraEnv` en `config.json`. Se añade al panel como **Mis tickets**.
+
+## Widget «Mis links»
+
+Un lanzador de links: guardas los que abres a diario (tableros, dashboards, docs, ambientes) y los abres sin buscar en el navegador.
+
+- **Atajo de teclado:** clic derecho en el ícono → «Configurar Mis links…» → «Atajos de teclado», y asigna una combinación (por ejemplo `Meta+L`) que abre el panel desde cualquier lugar.
+- Al abrirse, el cursor ya está en el buscador: escribes parte del título, dominio o grupo, y con **Enter** se abre el primero. **↑/↓** cambian de resultado.
+- **Agregar:** botón «Agregar». Pega solo lo que tengas en el portapapeles; el título es opcional (si no, usa el dominio y el último tramo de la ruta) y el grupo también (elige uno existente o escribe uno nuevo).
+- Al pasar el mouse sobre un link: copiar o borrar. Se agrupan por «grupo» y quedan ordenados por nombre.
+- Se guardan en `~/.local/share/pr-tracker/links.json` (se puede editar a mano); no se envía nada a ningún servicio. Se añade al panel como **Mis links**.
 
 ## Requisitos
 
@@ -91,7 +103,7 @@ Requiere `jiraSite` y `jiraEnv` en `config.json`. Se añade al panel como **Mis 
 ### Actualizar o desinstalar
 
 - Después de un `git pull` o de editar el código: `./install.sh` y reinicia Plasma (paso 6).
-- Desinstalar: `kpackagetool6 -t Plasma/Applet -r io.personal.prtracker && rm ~/.local/bin/my-prs`.
+- Desinstalar: `kpackagetool6 -t Plasma/Applet -r io.personal.prtracker` (y `io.personal.tickettracker`, `io.personal.linkbox` para los otros widgets) y borrar `~/.local/bin/my-prs`, `my-tickets` y `my-links`.
 
 ### Problemas comunes
 
@@ -119,6 +131,17 @@ Pensado para dos casos: leer el PR de otra persona y **entender el código que l
 - **Terminal:** abre una terminal con el diff completo (`git diff` con [delta](https://github.com/dandavison/delta)) en el mismo orden de lectura.
 
 Si la rama del PR ya está abierta en uno de tus worktrees (lo normal en tus PRs), se usa ese en vez de crear otro. El clon local se busca por su `remote` dentro de `reposDir`; si no existe, se hace un clon parcial en `~/.cache/pr-tracker/repos`. Los worktrees nuevos quedan en `reviewDir` con el nombre `<repo>-pr<N>`; bórralos con `git worktree remove <ruta>`. Tu clon principal no se toca. La pestaña «Para revisar» solo muestra PRs donde GitHub te asignó como revisor y se oculta si no hay ninguno.
+
+### Code review con IA
+
+Cada PR tiene además un botón con el ícono de visto bueno que abre una **sesión interactiva de Claude Code** en una terminal. Consume tu uso normal de Claude y **no publica nada solo**: el borrador y cada acción externa los apruebas tú.
+
+- **Mis PRs → autorreview:** abre Claude en el worktree de tu rama y ejecuta `selfReviewPrompt` (por defecto `/code-review`, el review integrado de Claude Code) sobre tu cambio, antes de pedir review.
+- **Para revisar → code review de otro PR:**
+  - Si configuras `harnessDir`, abre Claude **en esa carpeta** con el agente `reviewAgent` (por defecto `review`, de `.claude/agents/`) y le pasa `owner/repo#N` con el link. Pensado para un repo de contexto propio con un agente de review (método, estilo y plantilla del equipo).
+  - Sin `harnessDir`, prepara el PR en un worktree y corre `selfReviewPrompt` ahí.
+
+Ejemplo de `config.json`: `"harnessDir": "~/ruta/a/tu/repo-de-contexto"`, `"reviewAgent": "review"`, `"selfReviewPrompt": "/code-review"` (puede ser cualquier skill o prompt tuyo).
 
 ### Ver lo que escribe la IA mientras lo escribe
 
@@ -157,6 +180,10 @@ Archivo `~/.config/pr-tracker/config.json`:
   "reposDir": "~/Proyectos",
   "reviewDir": "~/Proyectos/worktrees",
   "editor": "code",
+  "worktreeCmd": "claude",
+  "harnessDir": "~/ruta/a/tu/repo-de-contexto",
+  "reviewAgent": "review",
+  "selfReviewPrompt": "/code-review",
   "terminal": "kitty",
   "jiraSite": "tuempresa.atlassian.net",
   "jiraEnv": "~/.config/pr-tracker/jira.env"
@@ -179,10 +206,18 @@ El script también sirve desde la terminal:
 ```sh
 my-tickets block add <KEY> <BLOQUEADOR> [nota]   # KEY espera a BLOQUEADOR
 my-tickets block rm <KEY>
+my-tickets search <texto o clave>    # busca tickets en Jira (JSON)
+my-tickets worktrees                 # worktrees agrupados por clave de ticket (JSON)
+my-tickets open-wt <repo> <nombre>   # abre VS Code y una terminal con Claude en <repo>-<nombre>
+my-links                              # JSON con los links guardados
+my-links add <URL> [título] [grupo]   # guardar un link
+my-links rm <ID>                      # borrar un link
+my-links move <ID> <GRUPO>            # cambiar de grupo
 my-prs | jq                          # JSON con todo
 my-prs watch add <URL> [nota]        # seguir un PR ajeno
 my-prs watch rm <URL>                # dejar de seguirlo
 my-prs rereview <cuenta> <URL>       # pedir re-review a quienes ya revisaron
+my-prs codereview <cuenta> <URL> [otros|mio]   # sesión de Claude para code review (ver «Code review con IA»)
 my-prs review <cuenta> <URL> [list|code|git|term]   # worktree del PR; list imprime el orden de lectura, git abre solo la carpeta
 ```
 
