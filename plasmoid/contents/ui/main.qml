@@ -189,6 +189,10 @@ PlasmoidItem {
         showToast("Pidiendo re-review…")
         runner.connectSource(cli + " rereview " + q(account) + " " + q(url) + " # " + Date.now())
     }
+    function reviewCode(account, url, mode) {
+        showToast("Preparando el código…")
+        runner.connectSource(cli + " review " + q(account) + " " + q(url) + " " + mode + " # " + Date.now())
+    }
     function follow(url, note) {
         runner.connectSource(cli + " watch add " + q(url) + " " + q(note) + " # " + Date.now())
     }
@@ -204,6 +208,7 @@ PlasmoidItem {
             disconnectSource(source)
             const out = (data["stdout"] || data["stderr"] || "").trim()
             if (source.indexOf(" rereview ") >= 0) { root.showToast(out); }
+            else if (source.indexOf(" review ") >= 0) { root.showToast(out); }
             else if (source.indexOf(" watch add ") >= 0) { root.showToast(out.startsWith("Siguiendo") ? "Siguiendo PR" : (out || "No se pudo seguir")); root.refresh() }
             else if (source.indexOf(" watch rm ") >= 0) root.refresh()
         }
@@ -397,6 +402,9 @@ PlasmoidItem {
                             pr: modelData; colors: root.colors; glyphs: root.glyphs
                             subtitle: root.subtitleOf(modelData)
                             showReReview: modelData.label.indexOf("re-review") >= 0 || modelData.status === "observado"
+                            showReview: true
+                            onReviewCode: (account, url) => root.reviewCode(account, url, "git")
+                            onReviewTerm: (account, url) => root.reviewCode(account, url, "term")
                             onCopyLink: url => root.copyLink(url)
                             onOpenChecks: url => root.openChecks(url)
                             onReReview: (account, url) => root.reReview(account, url)
@@ -422,6 +430,10 @@ PlasmoidItem {
                             width: ListView.view.width
                             pr: modelData; colors: root.colors; glyphs: root.glyphs
                             subtitle: "de " + modelData.author + "  ·  " + modelData.repo + "  ·  hace " + modelData.ageDays + " d"
+                                + (modelData.filesTotal > 0 ? "  ·  visto " + modelData.filesViewed + "/" + modelData.filesTotal : "")
+                            showReview: true
+                            onReviewCode: (account, url) => root.reviewCode(account, url, "code")
+                            onReviewTerm: (account, url) => root.reviewCode(account, url, "term")
                             onCopyLink: url => root.copyLink(url)
                             onOpenChecks: url => root.openChecks(url)
                         }

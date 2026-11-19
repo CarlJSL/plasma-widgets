@@ -7,6 +7,9 @@ Uso:
   my-prs watch rm URL               dejar de seguirlo
   my-prs watch ack URL              marcar como avisado (lo usa el widget)
   my-prs rereview CUENTA URL        pedir re-review a quienes ya revisaron el PR
+  my-prs review CUENTA URL [code|term]  preparar un worktree del PR y abrirlo para leer el código
+                                    (list: solo imprime el orden; git: abre solo la carpeta para usar Control de código fuente; code: VS Code con los archivos sin ver, en orden de lectura;
+                                     term: diff en la terminal con delta, en el mismo orden)
 """
 import json, os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
@@ -29,7 +32,8 @@ PR_FIELDS = """
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 """
 Q_MINE = "query { search(query: \"is:pr is:open author:@me archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s } } } }" % PR_FIELDS
-Q_REVIEW = "query { search(query: \"is:pr is:open review-requested:@me draft:false archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s } } } }" % PR_FIELDS
+Q_REVIEW = "query { search(query: \"is:pr is:open review-requested:@me draft:false archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s files(first: 100) { totalCount nodes { path viewerViewedState } } } } } }" % PR_FIELDS
+Q_FILES = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { baseRefName headRefName files(first: 100) { nodes { path viewerViewedState } } } } }"
 Q_MERGED = "query($q:String!) { search(query: $q, type: ISSUE, first: 50) { nodes { ... on PullRequest { %s mergedAt } } } }" % PR_FIELDS
 Q_ONE = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { %s state mergedAt closedAt } } }" % PR_FIELDS
 
@@ -289,6 +293,92 @@ def rereview(login, url):
     print("Re-review pedida a: " + ", ".join(who))
 
 
+# ---------- revisar el código ----------
+SKIP_FILE = re.compile(r"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|[^/]+\.lock|[^/]+\.snap|[^/]+\.min\.js)$|(^|/)(dist|generated)/")
+
+def read_rank(path):
+    """Orden de lectura: migraciones y contratos, entradas, lógica, tests, estilos, resto."""
+    p = path.lower()
+    if SKIP_FILE.search(p): return 9
+    if re.search(r"\.(spec|test)\.|(^|/)(test|tests|__tests__|e2e)/", p): return 4
+    if "migration" in p: return 0
+    if re.search(r"(dto|entity|entities|model|interface|\.types?)\b|\.d\.ts$", p): return 1
+    if re.search(r"controller|\.module\.|routes?|resolver|handler", p): return 2
+    if re.search(r"\.(s?css|less)$", p): return 5
+    if re.search(r"\.(md|json|ya?ml|toml|env\w*)$|dockerfile", p): return 6
+    return 3
+
+def reading_order(paths):
+    return sorted(paths, key=lambda f: (read_rank(f), f))
+
+def find_clone(owner, repo, cfg):
+    """Busca un clon local del repo (por su remote) en reposDir; si no hay, hace un clon parcial en la caché."""
+    root = Path(os.path.expanduser(cfg.get("reposDir", "~/Proyectos")))
+    want = f"{owner}/{repo}".lower()
+    cands = [d for d in root.glob("*") if d.is_dir()] + [d for d in root.glob("*/*") if d.is_dir()]
+    for d in cands:
+        if not (d / ".git").is_dir(): continue
+        try: url = sh(["git", "-C", str(d), "remote", "get-url", "origin"], timeout=10).strip().lower()
+        except Exception: continue
+        if re.search(r"[:/]" + re.escape(want) + r"(\.git)?$", url): return d
+    dest = HOME / ".cache/pr-tracker/repos" / owner / repo
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        sh(["git", "clone", "--filter=blob:none", f"https://github.com/{owner}/{repo}.git", str(dest)], timeout=300)
+    return dest
+
+def review_cmd(args):
+    login, url = args[0], args[1]
+    mode = args[2] if len(args) > 2 else "code"
+    cfg = load(CONFIG, {})
+    o, r, n = parse_url(url)
+    env = env_for(login)
+    pr = gql(env, Q_FILES, o=o, r=r, n=n)["repository"]["pullRequest"]
+    base = pr["baseRefName"]
+    clone = find_clone(o, r, cfg)
+    g = ["git", "-C", str(clone)]
+    sh(g + ["fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], timeout=120)
+    # Si la rama del PR ya está abierta en un worktree tuyo (tus propios PRs), se usa ese.
+    wt = None
+    cur = None
+    for line in sh(g + ["worktree", "list", "--porcelain"]).splitlines():
+        if line.startswith("worktree "): cur = line[9:]
+        elif line == f"branch refs/heads/{pr['headRefName']}": wt = Path(cur); break
+    if wt is None:
+        sh(g + ["fetch", "-q", "origin", f"pull/{n}/head"], timeout=120)
+        head = sh(g + ["rev-parse", "FETCH_HEAD"]).strip()
+        wt = Path(os.path.expanduser(cfg.get("reviewDir", "~/Proyectos/worktrees"))) / f"{r}-pr{n}"
+        if wt.exists(): sh(["git", "-C", str(wt), "checkout", "-q", "--detach", head])
+        else: sh(g + ["worktree", "add", "-q", "--detach", str(wt), head], timeout=120)
+    changed = [f for f in sh(["git", "-C", str(wt), "diff", "--name-only", f"origin/{base}...HEAD"]).splitlines() if f]
+    ordered = reading_order(changed)
+    viewed = {f["path"] for f in pr["files"]["nodes"] if f["viewerViewedState"] == "VIEWED"}
+    order_file = HOME / ".cache/pr-tracker" / f"review-{r}-{n}.order"
+    order_file.parent.mkdir(parents=True, exist_ok=True)
+    order_file.write_text("\n".join(ordered) + "\n")
+    if mode == "list":
+        for f in ordered: print(("  visto " if f in viewed else "        ") + f"[{read_rank(f)}] {f}")
+        print(f"{len(ordered)} archivos, {len(viewed)} vistos; worktree: {wt}")
+    elif mode == "git":
+        editor = cfg.get("editor", "code")
+        subprocess.Popen([editor, str(wt)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"#{n} abierto en {editor}: Ctrl+Shift+G para ver los cambios")
+    elif mode == "term":
+        shell = os.environ.get("SHELL", "sh")
+        cmd = (f"git -C {wt} -c core.pager='delta --line-numbers' diff -O{order_file} origin/{base}...HEAD; "
+               f"exec {shell}")
+        term = cfg.get("terminal", "kitty")
+        argv = [term, "--directory", str(wt), "sh", "-c", cmd] if term == "kitty" else [term, "-e", "sh", "-c", cmd]
+        subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"Diff de #{n} abierto en la terminal ({len(ordered)} archivos)")
+    else:
+        todo = [f for f in ordered if read_rank(f) < 9 and f not in viewed][:25]
+        editor = cfg.get("editor", "code")
+        subprocess.Popen([editor, "-n", str(wt)] + [str(wt / f) for f in todo if (wt / f).exists()],
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"#{n} abierto en {editor}: {len(todo)} archivos por leer, {len(viewed)} ya vistos")
+
+
 # ---------- principal ----------
 def main():
     argv = sys.argv[1:]
@@ -298,6 +388,14 @@ def main():
         try: rereview(argv[1], argv[2])
         except subprocess.CalledProcessError as e:
             print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
+        return
+
+    if argv and argv[0] == "review":
+        try: review_cmd(argv[1:])
+        except subprocess.CalledProcessError as e:
+            print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
+        except Exception as e:
+            print("Error: " + str(e)[:200]); sys.exit(1)
         return
 
     cfg = load(CONFIG, {})
@@ -342,7 +440,11 @@ def main():
                 if (now() - datetime.fromisoformat(n["mergedAt"].replace("Z", "+00:00"))).days < merged_days: merged.append(d)
             for n in rev:
                 if not n: continue
-                d = base(n, l); d.update({"status": "review", "label": "Pide tu review"}); review.append(d)
+                d = base(n, l); d.update({"status": "review", "label": "Pide tu review"})
+                fl = (n.get("files") or {})
+                d["filesTotal"] = fl.get("totalCount", 0)
+                d["filesViewed"] = sum(1 for f in fl.get("nodes", []) if f["viewerViewedState"] == "VIEWED")
+                review.append(d)
         watching = [f.result() for f in wfut]
 
     # Jira (opcional): estado del ticket de cada PR mío

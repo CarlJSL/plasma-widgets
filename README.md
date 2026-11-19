@@ -8,7 +8,7 @@ Widget de **KDE Plasma 6** que muestra en la barra tus **pull requests abiertos*
 - Al hacer clic se abre el panel con tres pestañas:
   - **Mis PRs:** tus PRs abiertos, agrupados por repo, con `#número título`, estado, ticket de Jira (si está configurado) y `rama → base`.
   - Los PRs de un mismo **cambio** (por ejemplo front + back) se agrupan en una tarjeta con avisos: «front aprobado, pero back observado», «front ya se mergeó; falta back» o «todos aprobados: se pueden mergear juntos». Se agrupan por el mismo ticket, o por un par `st-X`/`api-X` con el mismo título (sin «(app)»/«(api)»). Los desalineados también mandan notificación.
-  - **Para revisar:** PRs de otros que te pidieron review, con su antigüedad.
+  - **Para revisar:** PRs de otros que te pidieron review, con su antigüedad y cuántos archivos llevas marcados como «Viewed» en GitHub (`visto 4/12`). Al pasar el mouse, dos botones para **leer el código** en vez de solo aprobar (ver «Revisar el código»).
   - **Mergeados:** tus PRs mergeados en los últimos `mergedDays` días (5 por defecto), con cuándo se mergearon, a qué rama y el estado de su ticket.
   - **Seguimiento:** PRs ajenos de los que dependes. Pegas el link y una nota («cuando se mergee abro el mío») y el widget te avisa con una notificación cuando se hace merge o se cierra. Queda en la lista hasta que lo quites.
 - Clic en una fila abre el PR. Al pasar el mouse aparecen acciones: copiar link, abrir los checks (CI) y, en tus PRs observados o en re-review, **pedir re-review** a quienes ya revisaron.
@@ -109,6 +109,41 @@ Requiere `jiraSite` y `jiraEnv` en `config.json`. Se añade al panel como **Mis 
 - `plasmoid/` es el widget QML. Ejecuta el script con el motor `executable` de Plasma5Support y pinta el resultado.
 - Un PR cuenta como «Observado» solo si el review de cambios solicitados es sobre el commit actual (`headRefOid`); si subiste commits después, pasa a re-review.
 
+## Revisar el código (no solo delegarlo)
+
+Pensado para dos casos: leer el PR de otra persona y **entender el código que la IA escribe por ti**. En «Para revisar» y en «Mis PRs», cada PR tiene dos botones al pasar el mouse:
+
+- **VS Code:**
+  - En **Para revisar** crea (o actualiza) un worktree del PR y abre solo los archivos que aún no marcaste como vistos, en **orden de lectura**: migraciones, contratos (DTO, entidades, interfaces), controllers y módulos, lógica, tests, estilos y el resto. Lockfiles y snapshots se omiten. Máximo 25 archivos por apertura.
+  - En **Mis PRs** abre solo la carpeta del worktree de tu rama, para usar el panel **Control de código fuente** (`Ctrl+Shift+G`). Ahí ves los archivos modificados (`M`) y nuevos (`U`) con su diff lado a lado.
+- **Terminal:** abre una terminal con el diff completo (`git diff` con [delta](https://github.com/dandavison/delta)) en el mismo orden de lectura.
+
+Si la rama del PR ya está abierta en uno de tus worktrees (lo normal en tus PRs), se usa ese en vez de crear otro. El clon local se busca por su `remote` dentro de `reposDir`; si no existe, se hace un clon parcial en `~/.cache/pr-tracker/repos`. Los worktrees nuevos quedan en `reviewDir` con el nombre `<repo>-pr<N>`; bórralos con `git worktree remove <ruta>`. Tu clon principal no se toca. La pestaña «Para revisar» solo muestra PRs donde GitHub te asignó como revisor y se oculta si no hay ninguno.
+
+### Ver lo que escribe la IA mientras lo escribe
+
+1. **Extensión de Claude Code para VS Code** (`code --install-extension anthropic.claude-code`): cada edición propuesta se abre como diff en el editor, con aceptar o rechazar. En una sesión de terminal, `/ide` la conecta al editor. No apruebes ediciones en bloque si quieres ver cada cambio.
+2. **Panel Control de código fuente** (`Ctrl+Shift+G`): lista en vivo de archivos modificados y nuevos mientras Claude trabaja.
+3. **[GitLens](https://gitlens.dev)** (`code --install-extension eamodio.gitlens`): para la rama completa contra la base, en `Commits` → `Compare`, con todos los archivos y su diff aunque ya estén en commits.
+4. **Hábitos que ayudan:** pedir un plan antes del código, features en pasos chicos con un commit por paso, y escribir en una línea con tus palabras qué hace el PR antes de abrirlo.
+
+VS Code no permite abrir directamente en el panel de cambios desde la línea de comandos; la primera vez en cada carpeta pulsa `Ctrl+Shift+G` y después recuerda la vista.
+
+**Atajo opcional para la terminal (fish):** si abres Claude en un worktree con una función propia, que también abra el editor en esa carpeta:
+
+```fish
+function wt --description 'VS Code y Claude en el worktree de un ticket: wt <repo> <KEY>'
+    set -l dir ~/Proyectos/worktrees/$argv[1]-$argv[2]
+    test -d $dir; or begin; echo "No existe $dir"; return 1; end
+    cd $dir; or return 1
+    if type -q code
+        command code $dir >/dev/null 2>&1 &
+        disown
+    end
+    claude
+end
+```
+
 ## Configuración opcional
 
 Archivo `~/.config/pr-tracker/config.json`:
@@ -119,6 +154,10 @@ Archivo `~/.config/pr-tracker/config.json`:
   "mergedDays": 5,
   "ticketStaleDays": 3,
   "boards": { "PROYECTO": 123 },
+  "reposDir": "~/Proyectos",
+  "reviewDir": "~/Proyectos/worktrees",
+  "editor": "code",
+  "terminal": "kitty",
   "jiraSite": "tuempresa.atlassian.net",
   "jiraEnv": "~/.config/pr-tracker/jira.env"
 }
@@ -144,6 +183,7 @@ my-prs | jq                          # JSON con todo
 my-prs watch add <URL> [nota]        # seguir un PR ajeno
 my-prs watch rm <URL>                # dejar de seguirlo
 my-prs rereview <cuenta> <URL>       # pedir re-review a quienes ya revisaron
+my-prs review <cuenta> <URL> [list|code|git|term]   # worktree del PR; list imprime el orden de lectura, git abre solo la carpeta
 ```
 
 Los PRs en seguimiento se guardan en `~/.local/share/pr-tracker/watch.json`.

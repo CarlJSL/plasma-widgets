@@ -12,6 +12,7 @@ PlasmaComponents.ItemDelegate {
     property var glyphs
     property string subtitle: ""
     property bool showReReview: false
+    property bool showReview: false
     property bool alwaysShowActions: false
     property string extraIcon: ""
     property string extraTip: ""
@@ -20,6 +21,8 @@ PlasmaComponents.ItemDelegate {
     signal openChecks(string url)
     signal reReview(string account, string url)
     signal extra(string url)
+    signal reviewCode(string account, string url)
+    signal reviewTerm(string account, string url)
 
     onClicked: Qt.openUrlExternally(pr.url)
     HoverHandler { id: hh }
@@ -67,6 +70,16 @@ PlasmaComponents.ItemDelegate {
             PlasmaComponents.ToolButton {
                 icon.name: "run-build"; onClicked: row.openChecks(row.pr.url)
                 PlasmaComponents.ToolTip { text: "Abrir checks (CI)" }
+            }
+            PlasmaComponents.ToolButton {
+                visible: row.showReview
+                icon.name: "document-edit"; onClicked: row.reviewCode(row.pr.account, row.pr.url)
+                PlasmaComponents.ToolTip { text: "Revisar el código en VS Code (archivos en orden de lectura)" }
+            }
+            PlasmaComponents.ToolButton {
+                visible: row.showReview
+                icon.name: "utilities-terminal"; onClicked: row.reviewTerm(row.pr.account, row.pr.url)
+                PlasmaComponents.ToolTip { text: "Ver el diff en la terminal (delta, en orden de lectura)" }
             }
             PlasmaComponents.ToolButton {
                 visible: row.showReReview
