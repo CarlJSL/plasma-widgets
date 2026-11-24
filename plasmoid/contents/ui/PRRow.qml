@@ -13,7 +13,10 @@ PlasmaComponents.ItemDelegate {
     property string subtitle: ""
     property bool showReReview: false
     property bool showReview: false
+    property bool showConflicts: false
     property string codeReviewTip: ""
+    property var reviewInfo: null   // estado del review en lote: {status, draft, error}
+    signal openDraft(string path)
     property bool alwaysShowActions: false
     property string extraIcon: ""
     property string extraTip: ""
@@ -25,6 +28,7 @@ PlasmaComponents.ItemDelegate {
     signal reviewCode(string account, string url)
     signal reviewTerm(string account, string url)
     signal codeReview(string account, string url)
+    signal resolveConflicts(string account, string url)
 
     onClicked: Qt.openUrlExternally(pr.url)
     HoverHandler { id: hh }
@@ -56,6 +60,13 @@ PlasmaComponents.ItemDelegate {
                     elide: Text.ElideRight; Layout.fillWidth: true
                 }
                 PlasmaComponents.Label {
+                    visible: !!row.reviewInfo
+                    text: !row.reviewInfo ? "" : ({ queued: "en cola", running: "revisando…", done: "borrador listo",
+                                                     error: "review falló" })[row.reviewInfo.status] || ""
+                    color: !row.reviewInfo ? "" : ({ queued: "#8b949e", running: "#2f81f7", done: "#2da44e", error: "#e5484d" })[row.reviewInfo.status] || "#8b949e"
+                    font: Kirigami.Theme.smallFont
+                }
+                PlasmaComponents.Label {
                     visible: row.pr.stale === true
                     text: "sin movimiento " + row.pr.idleDays + " d"
                     color: "#d98e04"; font: Kirigami.Theme.smallFont
@@ -74,6 +85,11 @@ PlasmaComponents.ItemDelegate {
                 PlasmaComponents.ToolTip { text: "Abrir checks (CI)" }
             }
             PlasmaComponents.ToolButton {
+                visible: row.showConflicts
+                icon.name: "vcs-merge"; onClicked: row.resolveConflicts(row.pr.account, row.pr.url)
+                PlasmaComponents.ToolTip { text: "Resolver conflictos: abre su worktree, VS Code y Claude con las instrucciones" }
+            }
+            PlasmaComponents.ToolButton {
                 visible: row.showReview
                 icon.name: "document-edit"; onClicked: row.reviewCode(row.pr.account, row.pr.url)
                 PlasmaComponents.ToolTip { text: "Revisar el código en VS Code (archivos en orden de lectura)" }
@@ -82,6 +98,11 @@ PlasmaComponents.ItemDelegate {
                 visible: row.showReview
                 icon.name: "utilities-terminal"; onClicked: row.reviewTerm(row.pr.account, row.pr.url)
                 PlasmaComponents.ToolTip { text: "Ver el diff en la terminal (delta, en orden de lectura)" }
+            }
+            PlasmaComponents.ToolButton {
+                visible: !!row.reviewInfo && row.reviewInfo.status === "done"
+                icon.name: "document-open"; onClicked: row.openDraft(row.reviewInfo.draft)
+                PlasmaComponents.ToolTip { text: "Abrir el borrador del review en VS Code" }
             }
             PlasmaComponents.ToolButton {
                 visible: row.codeReviewTip !== ""

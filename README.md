@@ -10,6 +10,9 @@ Widgets de **KDE Plasma 6** para el día a día de desarrollo: **Mis PRs** (tus 
   - Los PRs de un mismo **cambio** (por ejemplo front + back) se agrupan en una tarjeta con avisos: «front aprobado, pero back observado», «front ya se mergeó; falta back» o «todos aprobados: se pueden mergear juntos». Se agrupan por el mismo ticket, o por un par `st-X`/`api-X` con el mismo título (sin «(app)»/«(api)»). Los desalineados también mandan notificación.
   - **Para revisar:** PRs de otros que te pidieron review, con su antigüedad y cuántos archivos llevas marcados como «Viewed» en GitHub (`visto 4/12`). Al pasar el mouse, dos botones para **leer el código** en vez de solo aprobar (ver «Revisar el código»).
   - **Mergeados:** tus PRs mergeados en los últimos `mergedDays` días (5 por defecto), con cuándo se mergearon, a qué rama y el estado de su ticket.
+  - **Para revisar** también incluye los PRs que ya revisaste y recibieron commits después de tu review (con la etiqueta «Commits nuevos tras tu review»): GitHub no te los vuelve a pedir solo.
+    En esos PRs los botones trabajan solo con lo que cambió desde tu review: el diff y los archivos que se abren son los de `<tu commit>..HEAD` (sin lo que solo entró de la base por un merge), y la sesión de Claude arranca como re-revisión con ese rango.
+  - **Revisados:** PRs de otras personas que ya revisaste (aprobaste, pediste cambios o comentaste) en los últimos `reviewedDays` días (14 por defecto). Muestra tu veredicto, si el PR ya se mergeó y si hay commits nuevos desde tu review.
   - **Seguimiento:** PRs ajenos de los que dependes. Pegas el link y una nota («cuando se mergee abro el mío») y el widget te avisa con una notificación cuando se hace merge o se cierra. Queda en la lista hasta que lo quites.
 - Clic en una fila abre el PR. Al pasar el mouse aparecen acciones: copiar link, abrir los checks (CI) y, en tus PRs observados o en re-review, **pedir re-review** a quienes ya revisaron.
 - **Estancados:** un PR esperando review sin actividad por `staleDays` o más (por defecto 2) se marca «sin movimiento N d» y recibes **un recordatorio diario** (después de las 9:00).
@@ -143,6 +146,17 @@ Cada PR tiene además un botón con el ícono de visto bueno que abre una **sesi
 
 Ejemplo de `config.json`: `"harnessDir": "~/ruta/a/tu/repo-de-contexto"`, `"reviewAgent": "review"`, `"selfReviewPrompt": "/code-review"` (puede ser cualquier skill o prompt tuyo).
 
+### Review en lote (muchos PRs asignados)
+
+En «Para revisar», el botón **Review en lote…** hace una **primera pasada** de code review de varios PRs a la vez, sin abrir una sesión por cada uno. Requiere `harnessDir` (ver arriba).
+
+- Eliges cuántos (los que más llevan esperando van primero) y confirmas. Corre en **segundo plano** con `claude -p` y el agente `reviewAgent`, de a `batchParallel` PRs (3 por defecto).
+- **No publica nada.** El lote solo puede leer (git, `gh pr view/diff/checks`, Jira en lectura, CodeGraph); tiene denegados editar archivos, `git push`, `gh pr review/comment/merge/edit/close` y `gh api`. No hace build ni tests (queda en «No verifiqué»), no escribe en Obsidian y no lanza subagentes, para gastar menos.
+- Cada PR deja un borrador en `~/.local/share/pr-tracker/reviews/<repo>-pr<N>-<sha>.md`. La fila muestra `en cola`, `revisando…`, `borrador listo` o `review falló`, y el botón de documento abre el borrador en VS Code. El progreso se actualiza cada 15 s y al terminar llega una notificación. Un PR con borrador del mismo commit se salta; si el autor sube cambios, vuelve a quedar pendiente.
+- **Para terminar un PR:** botón de code review (la sesión interactiva). Si hay borrador, Claude lo lee, lo verifica contra el código, completa lo que faltó y te lo muestra; publicas solo con tu OK.
+- **Cuesta uso de Claude:** cada review es una revisión completa con el agente. Prueba primero con 2 o 3 y revisa la calidad. `batchModel` (por ejemplo `"sonnet"`) lo abarata; `batchTimeoutMin` (30) limita cada review; `batchAddDirs` (`["~/Proyectos"]`) son las carpetas que puede leer.
+- `my-prs batch <cuenta> <URL> ...` y `my-prs batch-stop` hacen lo mismo desde la terminal.
+
 ### Ver lo que escribe la IA mientras lo escribe
 
 1. **Extensión de Claude Code para VS Code** (`code --install-extension anthropic.claude-code`): cada edición propuesta se abre como diff en el editor, con aceptar o rechazar. En una sesión de terminal, `/ide` la conecta al editor. No apruebes ediciones en bloque si quieres ver cada cambio.
@@ -175,6 +189,7 @@ Archivo `~/.config/pr-tracker/config.json`:
 {
   "staleDays": 2,
   "mergedDays": 5,
+  "reviewedDays": 14,
   "ticketStaleDays": 3,
   "boards": { "PROYECTO": 123 },
   "reposDir": "~/Proyectos",
@@ -184,6 +199,10 @@ Archivo `~/.config/pr-tracker/config.json`:
   "harnessDir": "~/ruta/a/tu/repo-de-contexto",
   "reviewAgent": "review",
   "selfReviewPrompt": "/code-review",
+  "batchParallel": 3,
+  "batchModel": "sonnet",
+  "batchTimeoutMin": 30,
+  "batchAddDirs": ["~/Proyectos"],
   "terminal": "kitty",
   "jiraSite": "tuempresa.atlassian.net",
   "jiraEnv": "~/.config/pr-tracker/jira.env"

@@ -192,6 +192,13 @@ def main():
             if d.get("isLast", True) or not token: break
     except Exception as e:
         out({"error": "Jira: " + str(e)[:150], "tickets": []}); return
+    if not tickets:
+        # Jira devuelve una lista vacía (sin error) cuando el token no vale: comprobarlo antes de decir «sin tickets».
+        try:
+            urlrequest.urlopen(urlrequest.Request(f"https://{site}/rest/api/3/myself",
+                headers={"Authorization": auth, "Accept": "application/json"}), timeout=15).read()
+        except Exception as e:
+            out({"error": "Jira rechazó el token (" + str(e)[:60] + "). Genera uno nuevo en id.atlassian.com y ponlo en tu jira.env", "tickets": []}); return
     # Orden según el tablero de Jira: tablero → columna → más reciente primero.
     chosen = {}
     forced = cfg.get("boards", {})

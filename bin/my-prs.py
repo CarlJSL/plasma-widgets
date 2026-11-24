@@ -8,11 +8,13 @@ Uso:
   my-prs watch ack URL              marcar como avisado (lo usa el widget)
   my-prs rereview CUENTA URL        pedir re-review a quienes ya revisaron el PR
   my-prs codereview CUENTA URL otros|mio   code review con IA (otros: agente de `harnessDir` si existe; mio: autorreview en tu worktree)
+  my-prs batch CUENTA URL [CUENTA URL ...]   primera pasada de code review de varios PRs en segundo plano (borradores)
+  my-prs batch-stop                          cancelar el lote en curso
   my-prs review CUENTA URL [code|term]  preparar un worktree del PR y abrirlo para leer el código
                                     (list: solo imprime el orden; git: abre solo la carpeta para usar Control de código fuente; code: VS Code con los archivos sin ver, en orden de lectura;
                                      term: diff en la terminal con delta, en el mismo orden)
 """
-import json, os, re, subprocess, sys
+import json, os, re, shlex, signal, subprocess, sys, threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,8 +36,10 @@ PR_FIELDS = """
 """
 Q_MINE = "query { search(query: \"is:pr is:open author:@me archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s } } } }" % PR_FIELDS
 Q_REVIEW = "query { search(query: \"is:pr is:open review-requested:@me draft:false archived:false sort:updated-desc\", type: ISSUE, first: 50) { nodes { ... on PullRequest { %s files(first: 100) { totalCount nodes { path viewerViewedState } } } } } }" % PR_FIELDS
-Q_FILES = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { baseRefName headRefName files(first: 100) { nodes { path viewerViewedState } } } } }"
+Q_FILES = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { title baseRefName headRefName files(first: 100) { nodes { path viewerViewedState } } } } }"
+Q_LASTREV = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { headRefOid viewerLatestReview { state submittedAt commit { oid } } } } }"
 Q_MERGED = "query($q:String!) { search(query: $q, type: ISSUE, first: 50) { nodes { ... on PullRequest { %s mergedAt } } } }" % PR_FIELDS
+Q_REVIEWED = "query($q:String!) { search(query: $q, type: ISSUE, first: 50) { nodes { ... on PullRequest { %s state mergedAt viewerLatestReview { state submittedAt commit { oid } } files(first: 100) { totalCount nodes { path viewerViewedState } } } } } }" % PR_FIELDS
 Q_ONE = "query($o:String!,$r:String!,$n:Int!) { repository(owner:$o,name:$r) { pullRequest(number:$n) { %s state mergedAt closedAt } } }" % PR_FIELDS
 
 
@@ -103,8 +107,11 @@ def base(pr, login):
     return {"account": login, "repo": pr["repository"]["name"], "owner": pr["repository"]["nameWithOwner"],
             "number": pr["number"], "title": pr["title"], "url": pr["url"],
             "author": (pr["author"] or {}).get("login", ""), "branch": pr["headRefName"], "base": pr["baseRefName"],
-            "createdAt": pr["createdAt"], "updatedAt": pr["updatedAt"], "ageDays": days_since(pr["createdAt"]),
-            "idleDays": days_since(pr["updatedAt"])}
+            "sha": pr.get("headRefOid", ""), "createdAt": pr["createdAt"], "updatedAt": pr["updatedAt"], "ageDays": days_since(pr["createdAt"]),
+            "idleDays": days_since(pr["updatedAt"]),
+            "reviews": [{"login": x["author"]["login"], "state": x["state"],
+                         "current": (x["commit"] or {}).get("oid") == pr.get("headRefOid")}
+                        for x in pr["latestReviews"]["nodes"] if x.get("author")]}
 
 TICKET = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
 def ticket_of(pr):
@@ -351,10 +358,27 @@ def prepare_wt(login, url, cfg):
         else: sh(g + ["worktree", "add", "-q", "--detach", str(wt), head], timeout=120)
     return o, r, n, pr, base, wt
 
+def my_last_review(login, o, r, n):
+    """Mi último review del PR y si el PR recibió commits después: (estado, sha revisado, sha actual) o None."""
+    pr = gql(env_for(login), Q_LASTREV, o=o, r=r, n=n)["repository"]["pullRequest"]
+    v = pr.get("viewerLatestReview")
+    oid = ((v or {}).get("commit") or {}).get("oid")
+    if not v or not oid or oid == pr["headRefOid"]: return None
+    return v["state"], oid, pr["headRefOid"]
+
+def have_commit(g, oid):
+    """El commit existe en el clon (si se reescribió la historia puede no estar: se intenta traer por sha)."""
+    ok = lambda: subprocess.run(g + ["cat-file", "-e", oid + "^{commit}"], capture_output=True).returncode == 0
+    if ok(): return True
+    subprocess.run(g + ["fetch", "-q", "origin", oid], capture_output=True, timeout=120)
+    return ok()
+
+STATE_ES = {"APPROVED": "aprobé", "CHANGES_REQUESTED": "pedí cambios", "COMMENTED": "comenté", "DISMISSED": "descartado"}
+
 def launch_terminal(cfg, cwd, command):
     """Abre una terminal en cwd que ejecuta `command` (y se queda abierta mientras dure)."""
     term = cfg.get("terminal", "kitty")
-    sh_cmd = f"cd {json.dumps(str(cwd))} && exec {command}"
+    sh_cmd = f"cd {shlex.quote(str(cwd))} && exec {command}"
     argv = [term, "sh", "-c", sh_cmd] if term == "kitty" else [term, "-e", "sh", "-c", sh_cmd]
     if os.environ.get("PR_TRACKER_DRY"): print("DRY:", sh_cmd); return
     subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -373,11 +397,117 @@ def codereview_cmd(args):
         harness = Path(os.path.expanduser(harness))
         if not harness.is_dir(): print(f"No existe harnessDir: {harness}"); sys.exit(1)
         agent = cfg.get("reviewAgent", "review")
-        launch_terminal(cfg, harness, f"claude --agent {agent} " + json.dumps(f"Revisa el PR {o}/{r}#{n} ({url})"))
+        msg = f"Revisa el PR {o}/{r}#{n} ({url}). Arma el borrador con la estructura de plantillas/review.md"
+        try: lr = my_last_review(login, o, r, n)
+        except Exception: lr = None
+        if lr:
+            msg = (f"Re-revisión del PR {o}/{r}#{n} ({url}). Mi review anterior ({STATE_ES.get(lr[0], lr[0])}) fue sobre el commit {lr[1][:8]} y el PR "
+                   f"ya está en {lr[2][:8]}. Revisa solo lo que cambió desde mi review (git diff {lr[1][:8]}..{lr[2][:8]}, sin lo que entró de la base por un merge) "
+                   "con tu método de re-revisión: cada punto de mi review anterior queda resuelto, sigue o resuelto a medias, con la línea. "
+                   "Si dejas borrador, usa la estructura de plantillas/review.md. No publiques nada; muéstrame el resultado y espera mi OK")
+        draft = reviews_view().get(url, {})
+        if not lr and draft.get("status") == "done" and Path(draft.get("draft", "")).exists():
+            msg += (f". Ya hay un borrador de primera pasada en {draft['draft']} (hecho sin build ni tests): léelo, verifícalo "
+                    "contra el código, complétalo con lo que quedó en «No verifiqué» y muéstramelo completo; espera mi OK para publicar.")
+        launch_terminal(cfg, harness, f"claude --agent {agent} " + shlex.quote(msg))
     else:
         o, r, n, pr, base, wt = prepare_wt(login, url, cfg)
-        launch_terminal(cfg, wt, "claude " + json.dumps(self_prompt))
+        launch_terminal(cfg, wt, "claude " + shlex.quote(self_prompt))
     print(f"Code review de #{n} abierto en la terminal")
+
+RESOLVE_PROMPT = (
+    "Estás en el worktree del PR {o}/{r}#{n} (rama {head}). {situacion}\n\n"
+    "## Resolver\n"
+    "1. Por cada archivo en conflicto, entiende qué cambió cada lado y por qué: git log origin/{base} -5 -- <archivo>, git diff --merge <archivo>, "
+    "y la intención de este PR (git log origin/{base}..HEAD, descripción con gh pr view). No elijas un lado por defecto: conserva la intención de los dos.\n"
+    "2. Lockfiles y archivos generados no se mezclan a mano: toma el lado de origin/{base} y regenera con el gestor de paquetes. "
+    "Migraciones: si dos tocan lo mismo, dímelo antes de decidir.\n"
+    "3. Si no es obvio qué intención gana, pregúntame; no adivines.\n"
+    "4. Sin marcadores <<<<<<<, ======= ni >>>>>>>; que compile.\n\n"
+    "## Antes de pedirme el OK de commit y de push (hazlo tú, en este orden, y muéstrame cada resultado)\n"
+    "a. Tests de lo que tocaste y el build; di cuáles corriste y cuáles no.\n"
+    "b. Volumen de tests: git diff --numstat origin/{base}...HEAD; cifra de líneas de test (*.spec.ts, test/, e2e) contra las de código. Si el test supera al código, recórtalo.\n"
+    "c. Autorreview con `{autorreview}` en modo autor contra origin/{base} (queda en la conversación, no se publica).\n"
+    "d. {auditoria}; si no está disponible, dilo. Comprueba que existan los hooks de git (p. ej. Husky) y que se ejecuten. Nunca --no-verify.\n"
+    "e. Con todo eso, pídeme el OK del commit (mensaje en español, merge de origin/{base}) y, después, otro OK para el push. Sin rebase ni force push.\n\n"
+    "## Bitácora\n"
+    "{bitacora}"
+)
+
+def ticket_key(pr_title, branch):
+    m = TICKET.search(pr_title) or TICKET.search(branch.upper())
+    return m.group(1) if m else None
+
+def bitacora_note(cfg, key, wt, head, base, n):
+    vault, harness = cfg.get("vaultDir"), cfg.get("harnessDir")
+    if not key: return "El PR no tiene clave de ticket en el título ni en la rama: dime dónde anotarlo.", []
+    if not vault: return (f"Falta `vaultDir` en la config de pr-tracker, así que no sé dónde está la bitácora de {key}. Avísame antes de seguir; no inventes una ruta."), []
+    vault = Path(os.path.expanduser(vault)); f = vault / "Tickets" / key / "bitacora.md"
+    adds = [str(vault)] + ([str(Path(os.path.expanduser(harness)))] if harness else [])
+    if not f.exists():
+        cr = f"bash {Path(os.path.expanduser(harness)) / 'scripts/crear-ticket.sh'} --apply {key} {vault}" if harness else "scripts/crear-ticket.sh del meta-harness"
+        return (f"No existe la carpeta de {key} en Obsidian ({f.parent}). Pídeme OK para crearla con `{cr}` (sin sobrescribir nada) y luego anota ahí."), adds
+    return (f"Registra en {f}, antes de pasar a otra cosa, con la hora de `date \"+%Y-%m-%d %H:%M\"` y el formato "
+            f"`- **AAAA-MM-DD HH:MM** — [V] qué pasó y por qué` (solo [V] lo que verificaste en esta sesión, con el sha):\n"
+            f"- al empezar: PR #{n}, rama {head}, worktree {wt}, base origin/{base}, qué archivos chocaban y cómo los resolviste;\n"
+            f"- el resultado de cada comprobación (a–d), con la cifra de volumen de tests;\n"
+            f"- el commit y el push, solo cuando yo los apruebe y se hagan (sha incluido).\n"
+            f"Actualiza también el «Punto de reanudación» al inicio del archivo. Si algo no se hizo, anótalo como pendiente, no como hecho."), adds
+
+def resolve_cmd(args):
+    """resolve CUENTA URL: deja el PR en su worktree con el merge de la rama base en curso, abre VS Code en los
+    archivos en conflicto y una sesión de Claude con las instrucciones para resolverlos."""
+    login, url = args[0], args[1]
+    cfg = load(CONFIG, {})
+    o, r, n = parse_url(url)
+    pr = gql(env_for(login), Q_FILES, o=o, r=r, n=n)["repository"]["pullRequest"]
+    base, head = pr["baseRefName"], pr["headRefName"]
+    pr_title = pr.get("title", "")
+    clone = find_clone(o, r, cfg)
+    g = ["git", "-C", str(clone)]
+    sh(g + ["fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}", f"+refs/heads/{head}:refs/remotes/origin/{head}"], timeout=120)
+    wt, cur = None, None
+    for line in sh(g + ["worktree", "list", "--porcelain"]).splitlines():
+        if line.startswith("worktree "): cur = line[9:]
+        elif line == f"branch refs/heads/{head}": wt = Path(cur); break
+    if wt is None:
+        wt = Path(os.path.expanduser(cfg.get("reviewDir", "~/Proyectos/worktrees"))) / f"{r}-pr{n}-fix"
+        if not wt.exists(): sh(g + ["worktree", "add", "-q", "-B", head, str(wt), f"origin/{head}"], timeout=120)
+    w = ["git", "-C", str(wt)]
+    in_merge = subprocess.run(w + ["rev-parse", "-q", "--verify", "MERGE_HEAD"], capture_output=True).returncode == 0
+    if not in_merge:
+        if sh(w + ["status", "--porcelain"]).strip():
+            raise RuntimeError(f"El worktree {wt} tiene cambios sin commit: guárdalos antes de resolver conflictos")
+        subprocess.run(w + ["merge", "-q", "--ff-only", f"origin/{head}"], capture_output=True)  # ponerse al día con lo ya subido
+        subprocess.run(w + ["merge", "--no-commit", "--no-ff", f"origin/{base}"], capture_output=True, text=True)
+    files = [f for f in sh(w + ["diff", "--name-only", "--diff-filter=U"]).splitlines() if f]
+    key = ticket_key(pr_title, head)
+    if files:
+        situacion = f"Hay un merge de origin/{base} en curso con conflictos en:\n" + "\n".join("- " + f for f in files)
+    else:
+        staged = [f for f in sh(w + ["diff", "--cached", "--name-only"]).splitlines() if f]
+        situacion = (f"Hay un merge de origin/{base} en curso que git resolvió solo (sin conflictos) en {len(staged)} archivos, pero GitHub marca el PR con conflictos. "
+                     "Lo más probable es un renombre o movimiento de archivo en este PR mientras la base editó ese mismo archivo en su ruta vieja: "
+                     "GitHub lo da por conflicto y git lo resuelve aplicando la edición al archivo nuevo. "
+                     "Comprueba eso, no busques conflictos que no existen: 1) git diff --cached -M --name-status para ver los renombres del merge; "
+                     f"2) por cada archivo movido que la base tocó (git log --oneline $(git merge-base HEAD origin/{base})..origin/{base} -- <ruta vieja>), "
+                     "confirma que la edición de la base quedó en la ruta nueva (git diff --cached <ruta nueva>); "
+                     "3) revisa que ningún import o ruta de la base siga apuntando al lugar viejo. "
+                     "Si todo cuadra, con mi OK se confirma el merge y se sube, y GitHub recalcula al ver el merge hecho.")
+        if not staged:
+            subprocess.run(w + ["merge", "--abort"], capture_output=True)
+            print(f"#{n} ya está al día con origin/{base}: no hay nada que mezclar"); return
+    note, adds = bitacora_note(cfg, key, wt, head, base, n)
+    editor = cfg.get("editor", "code")
+    if os.environ.get("PR_TRACKER_DRY"): editor = "true"
+    subprocess.Popen([editor, "-n", str(wt)] + [str(wt / f) for f in files[:15]],
+                     start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    msg = RESOLVE_PROMPT.format(o=o, r=r, n=n, head=head, base=base, situacion=situacion, bitacora=note,
+                                autorreview=cfg.get("selfReviewPrompt", "/code-review"),
+                                auditoria=cfg.get("auditCommand", "La auditoría de seguridad del repo, si tiene una"))
+    extra = "".join(f" --add-dir {shlex.quote(a)}" for a in adds)
+    launch_terminal(cfg, wt, "claude " + shlex.quote(msg) + extra)
+    print(f"#{n}: " + (f"{len(files)} archivos en conflicto" if files else "merge limpio, listo para confirmar") + f" abierto en {editor} y en la terminal")
 
 def review_cmd(args):
     login, url = args[0], args[1]
@@ -385,6 +515,15 @@ def review_cmd(args):
     cfg = load(CONFIG, {})
     o, r, n, pr, base, wt = prepare_wt(login, url, cfg)
     changed = [f for f in sh(["git", "-C", str(wt), "diff", "--name-only", f"origin/{base}...HEAD"]).splitlines() if f]
+    since = None
+    try:
+        lr = my_last_review(login, o, r, n)
+        if lr and have_commit(["git", "-C", str(wt)], lr[1]):
+            since = lr[1]
+            news = set(sh(["git", "-C", str(wt), "diff", "--name-only", f"{since}..HEAD"]).splitlines())
+            changed = [f for f in changed if f in news]   # lo del PR que cambió desde mi review (sin lo que solo entró de la base)
+    except Exception:
+        since = None
     ordered = reading_order(changed)
     viewed = {f["path"] for f in pr["files"]["nodes"] if f["viewerViewedState"] == "VIEWED"}
     order_file = HOME / ".cache/pr-tracker" / f"review-{r}-{n}.order"
@@ -392,25 +531,153 @@ def review_cmd(args):
     order_file.write_text("\n".join(ordered) + "\n")
     if mode == "list":
         for f in ordered: print(("  visto " if f in viewed else "        ") + f"[{read_rank(f)}] {f}")
-        print(f"{len(ordered)} archivos, {len(viewed)} vistos; worktree: {wt}")
+        print((f"desde tu review ({since[:8]}): " if since else "") + f"{len(ordered)} archivos, {len(viewed)} vistos; worktree: {wt}")
     elif mode == "git":
         editor = cfg.get("editor", "code")
         subprocess.Popen([editor, str(wt)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"#{n} abierto en {editor}: Ctrl+Shift+G para ver los cambios")
+        print(f"#{n} abierto en {editor}: Ctrl+Shift+G para ver los cambios" + (f". Desde tu review: git diff {since[:8]}..HEAD" if since else ""))
     elif mode == "term":
         shell = os.environ.get("SHELL", "sh")
-        cmd = (f"git -C {wt} -c core.pager='delta --line-numbers' diff -O{order_file} origin/{base}...HEAD; "
+        if since:
+            rng = f"{since}..HEAD -- " + " ".join(shlex.quote(f) for f in ordered)
+        else:
+            rng = f"origin/{base}...HEAD"
+        cmd = (f"git -C {wt} -c core.pager='delta --line-numbers' diff -O{order_file} {rng}; "
                f"exec {shell}")
         term = cfg.get("terminal", "kitty")
         argv = [term, "--directory", str(wt), "sh", "-c", cmd] if term == "kitty" else [term, "-e", "sh", "-c", cmd]
         subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"Diff de #{n} abierto en la terminal ({len(ordered)} archivos)")
+        print(f"Diff de #{n} abierto en la terminal ({len(ordered)} archivos" + (f", solo lo nuevo desde tu review {since[:8]}" if since else "") + ")")
     else:
-        todo = [f for f in ordered if read_rank(f) < 9 and f not in viewed][:25]
+        todo = [f for f in ordered if read_rank(f) < 9 and (since or f not in viewed)][:25]
         editor = cfg.get("editor", "code")
         subprocess.Popen([editor, "-n", str(wt)] + [str(wt / f) for f in todo if (wt / f).exists()],
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print(f"#{n} abierto en {editor}: {len(todo)} archivos por leer, {len(viewed)} ya vistos")
+        print(f"#{n} abierto en {editor}: {len(todo)} archivos por leer" + (f" (solo lo nuevo desde tu review {since[:8]})" if since else f", {len(viewed)} ya vistos"))
+
+
+# ---------- code review en lote ----------
+REVIEWS = DATA / "reviews"
+RSTATE = REVIEWS / "state.json"
+BATCH_PID = REVIEWS / "batch.pid"
+_state_lock = threading.Lock()
+
+BATCH_PROMPT = (
+    "MODO LOTE, sin interacción. Revisa el PR {o}/{r}#{n} ({url}) con tu método (dos pasadas, ingeniería sin leer antes la "
+    "especificación) y el formato de plantillas/review.md.\n"
+    "Reglas de este modo: no hagas preguntas ni pidas OK; no publiques nada (ni gh pr review ni comentarios ni Jira); "
+    "no escribas en Obsidian ni crees carpetas de ticket; no ejecutes build, tests ni instales dependencias (decláralo en "
+    "«No verifiqué»: es una primera pasada); no lances subagentes: revisa tú solo con todos los ángulos; la copia aparte del repo "
+    "es un worktree de lectura. Tu respuesta final es el borrador completo en Markdown y nada más."
+)
+BATCH_RE_PROMPT = (
+    "MODO LOTE, sin interacción. RE-REVISIÓN del PR {o}/{r}#{n} ({url}). Mi review anterior ({estado}) fue sobre el commit {old} y el PR "
+    "ya está en {new}. Revisa solo lo que cambió desde mi review (git diff {old}..{new}, sin lo que entró de la base por un merge; si {old} "
+    "ya no existe por un rebase, usa git range-diff) con tu método de re-revisión y el formato de plantillas/review.md (ronda 2 o más): "
+    "cada punto de mi review anterior queda Corregido, Sigue o Declarado, con la línea, y después solo lo nuevo del delta.\n"
+    "Reglas de este modo: no hagas preguntas ni pidas OK; no publiques nada (ni gh pr review ni comentarios ni Jira); "
+    "no escribas en Obsidian ni crees carpetas de ticket; no ejecutes build, tests ni instales dependencias (decláralo en "
+    "«No verifiqué»); no lances subagentes: el delta es chico, revisa tú solo con todos los ángulos; la copia aparte del repo "
+    "es un worktree de lectura. Tu respuesta final es el borrador completo en Markdown y nada más."
+)
+BATCH_ALLOWED = ["Read", "Glob", "Grep", "Bash(git:*)", "Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr checks:*)",
+                 "Bash(gh pr list:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(wc:*)", "mcp__codegraph",
+                 "mcp__claude_ai_Atlassian_MCP__getJiraIssue", "mcp__claude_ai_Atlassian_MCP__listJiraIssueComments",
+                 "mcp__claude_ai_Atlassian_MCP__searchJiraIssuesUsingJql"]
+BATCH_DENIED = ["Edit", "Write", "NotebookEdit", "Bash(git push:*)", "Bash(gh pr review:*)", "Bash(gh pr comment:*)",
+                "Bash(gh pr merge:*)", "Bash(gh pr edit:*)", "Bash(gh pr close:*)", "Bash(gh api:*)"]
+
+def batch_running():
+    try:
+        os.kill(int(BATCH_PID.read_text()), 0); return True
+    except Exception: return False
+
+def reviews_view():
+    """Estado de los reviews en lote; lo que quedó «en curso» sin proceso vivo se marca como interrumpido."""
+    st = load(RSTATE, {})
+    if not batch_running():
+        for v in st.values():
+            if v.get("status") in ("queued", "running"): v["status"] = "error"; v["error"] = "interrumpido"
+    return st
+
+def set_review(url, **kw):
+    with _state_lock:
+        st = load(RSTATE, {})
+        st.setdefault(url, {}).update(kw, updated=now().isoformat())
+        save(RSTATE, st)
+
+def batch_cmd(args):
+    pairs = list(zip(args[0::2], args[1::2]))
+    cfg = load(CONFIG, {})
+    if not pairs: print("No hay PRs para revisar"); sys.exit(1)
+    if not cfg.get("harnessDir"): print("Falta harnessDir en config.json (carpeta con el agente de review)"); sys.exit(1)
+    if batch_running(): print("Ya hay un lote en curso"); sys.exit(1)
+    st = load(RSTATE, {})
+    for acct, url in pairs:
+        if st.get(url, {}).get("status") != "done":
+            st[url] = {"status": "queued", "account": acct, "updated": now().isoformat()}
+    save(RSTATE, st)
+    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "batch-run"] + args, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    BATCH_PID.parent.mkdir(parents=True, exist_ok=True); BATCH_PID.write_text(str(p.pid))
+    print(f"Lote iniciado: {len(pairs)} PRs, {int(cfg.get('batchParallel', 3))} a la vez")
+
+def batch_stop():
+    try: os.killpg(int(BATCH_PID.read_text()), signal.SIGTERM)
+    except Exception: pass
+    st = load(RSTATE, {})
+    for v in st.values():
+        if v.get("status") in ("queued", "running"): v["status"] = "error"; v["error"] = "cancelado"
+    save(RSTATE, st)
+    BATCH_PID.unlink(missing_ok=True)
+    print("Lote cancelado")
+
+def batch_run(args):
+    pairs = list(zip(args[0::2], args[1::2]))
+    cfg = load(CONFIG, {})
+    harness = Path(os.path.expanduser(cfg["harnessDir"]))
+    agent = cfg.get("reviewAgent", "review")
+    dirs = [os.path.expanduser(d) for d in cfg.get("batchAddDirs", ["~/Proyectos"])]
+    REVIEWS.mkdir(parents=True, exist_ok=True)
+    results = {"done": 0, "error": 0, "skip": 0}
+
+    def job(pair):
+        acct, url = pair
+        o, r, n = parse_url(url)
+        try:
+            sha = gql(env_for(acct), Q_ONE, o=o, r=r, n=n)["repository"]["pullRequest"]["headRefOid"]
+            prev = load(RSTATE, {}).get(url, {})
+            if prev.get("status") == "done" and prev.get("sha") == sha and Path(prev.get("draft", "")).exists():
+                results["skip"] += 1; return
+            set_review(url, status="running", sha=sha, account=acct, startedAt=now().isoformat(), error=None)
+            cmd = ["claude", "-p", "--agent", agent, "--output-format", "text"]
+            if cfg.get("batchModel"): cmd += ["--model", cfg["batchModel"]]
+            cmd += ["--add-dir"] + dirs + ["--allowedTools"] + BATCH_ALLOWED + ["--disallowedTools"] + BATCH_DENIED
+            try: lr = my_last_review(acct, o, r, n)
+            except Exception: lr = None
+            if lr:
+                prompt = BATCH_RE_PROMPT.format(o=o, r=r, n=n, url=url, estado=STATE_ES.get(lr[0], lr[0]), old=lr[1][:8], new=lr[2][:8])
+            else:
+                prompt = BATCH_PROMPT.format(o=o, r=r, n=n, url=url)
+            cmd += ["--", prompt]
+            res = subprocess.run(cmd, cwd=harness, capture_output=True, text=True, timeout=int(cfg.get("batchTimeoutMin", 30)) * 60)
+            text = res.stdout.strip()
+            if res.returncode != 0 or len(text) < 300:
+                raise RuntimeError((res.stderr or text or "respuesta vacía").strip()[:160])
+            draft = REVIEWS / f"{r}-pr{n}-{sha[:7]}.md"
+            draft.write_text(text + "\n")
+            set_review(url, status="done", draft=str(draft), finishedAt=now().isoformat())
+            results["done"] += 1
+        except Exception as e:
+            set_review(url, status="error", error=str(e)[:160]); results["error"] += 1
+
+    with ThreadPoolExecutor(max_workers=max(1, int(cfg.get("batchParallel", 3)))) as ex:
+        list(ex.map(job, pairs))
+    BATCH_PID.unlink(missing_ok=True)
+    try:
+        subprocess.run(["notify-send", "-a", "Mis PRs", "Reviews en lote terminados",
+                        f"{results['done']} borradores listos, {results['error']} con error, {results['skip']} ya al día"], timeout=10)
+    except Exception: pass
 
 
 # ---------- principal ----------
@@ -424,8 +691,21 @@ def main():
             print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
         return
 
+    if argv and argv[0] in ("batch", "batch-run", "batch-stop"):
+        try:
+            {"batch": batch_cmd, "batch-run": batch_run}.get(argv[0], lambda a: batch_stop())(argv[1:])
+        except Exception as e:
+            print("Error: " + str(e)[:200]); sys.exit(1)
+        return
     if argv and argv[0] == "codereview":
         try: codereview_cmd(argv[1:])
+        except subprocess.CalledProcessError as e:
+            print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
+        except Exception as e:
+            print("Error: " + str(e)[:200]); sys.exit(1)
+        return
+    if argv and argv[0] == "resolve":
+        try: resolve_cmd(argv[1:])
         except subprocess.CalledProcessError as e:
             print("Error: " + (e.stderr or str(e)).strip()[:200]); sys.exit(1)
         except Exception as e:
@@ -442,6 +722,7 @@ def main():
     cfg = load(CONFIG, {})
     stale_days = int(cfg.get("staleDays", 2))
     merged_days = int(cfg.get("mergedDays", 5))
+    reviewed_days = int(cfg.get("reviewedDays", 14))
     try:
         logins = accounts()
     except Exception as e:
@@ -457,16 +738,19 @@ def main():
         r = gql(envs[login], Q_REVIEW)
         since = (now() - timedelta(days=merged_days)).strftime("%Y-%m-%d")
         m = gql(envs[login], Q_MERGED, q=f"is:pr is:merged author:@me merged:>={since} sort:updated-desc")
-        return login, d["search"]["nodes"], r["search"]["nodes"], m["search"]["nodes"]
+        rs = (now() - timedelta(days=reviewed_days)).strftime("%Y-%m-%d")
+        try: rv = gql(envs[login], Q_REVIEWED, q=f"is:pr reviewed-by:@me -author:@me archived:false updated:>={rs} sort:updated-desc")["search"]["nodes"]
+        except Exception: rv = []
+        return login, d["search"]["nodes"], r["search"]["nodes"], m["search"]["nodes"], rv
 
-    prs, review, merged = [], [], []
+    prs, review, merged, reviewed = [], [], [], []
     with ThreadPoolExecutor(max_workers=6) as ex:
         futs = {l: ex.submit(per_account, l) for l in ok}
         watch_items = load(WATCH, [])
         wfut = [ex.submit(fetch_watch, i, ok, envs) for i in watch_items]
         for l, f in futs.items():
             try:
-                _, mine, rev, mer = f.result()
+                _, mine, rev, mer, rvd = f.result()
             except Exception as e:
                 errors.append(f"{l}: {str(e)[:120]}"); failed.append(l); continue
             for n in mine:
@@ -479,6 +763,22 @@ def main():
                 d.update({"status": "mergeado", "label": "Mergeado", "mergedAt": n["mergedAt"],
                           "mergedDaysAgo": days_since(n["mergedAt"])})
                 if (now() - datetime.fromisoformat(n["mergedAt"].replace("Z", "+00:00"))).days < merged_days: merged.append(d)
+            LBL = {"APPROVED": "Aprobaste", "CHANGES_REQUESTED": "Pediste cambios", "COMMENTED": "Comentaste", "DISMISSED": "Review descartado"}
+            for n in rvd:
+                v = (n or {}).get("viewerLatestReview")
+                if not v: continue
+                d = base(n, l)
+                merged_pr = bool(n.get("mergedAt"))
+                d.update({"status": "mergeado" if merged_pr else ("aprobado" if v["state"] == "APPROVED" else "review"),
+                          "label": LBL.get(v["state"], "Revisado"), "myState": v["state"], "reviewedAt": v["submittedAt"],
+                          "reviewedDaysAgo": days_since(v["submittedAt"]),
+                          "prState": "MERGED" if merged_pr else n["state"],
+                          "newCommits": bool((v.get("commit") or {}).get("oid")) and v["commit"]["oid"] != n.get("headRefOid", "") and n["state"] == "OPEN"})
+                fl = n.get("files") or {}
+                d["filesTotal"] = fl.get("totalCount", 0)
+                d["filesViewed"] = sum(1 for f in fl.get("nodes", []) if f["viewerViewedState"] == "VIEWED")
+                d["isDraft"] = bool(n.get("isDraft"))
+                reviewed.append(d)
             for n in rev:
                 if not n: continue
                 d = base(n, l); d.update({"status": "review", "label": "Pide tu review"})
@@ -488,6 +788,13 @@ def main():
                 review.append(d)
         watching = [f.result() for f in wfut]
 
+    # Un PR que ya revisaste y recibió commits después de tu review vuelve a «Para revisar»: GitHub no te lo
+    # vuelve a pedir solo, y sin esto el cambio pasa sin que nadie lo mire.
+    have = {p["url"] for p in review}
+    for p in reviewed:
+        if p["newCommits"] and not p["isDraft"] and p["myState"] != "DISMISSED" and p["url"] not in have:
+            d = dict(p); d.update({"status": "review", "label": "Commits nuevos tras tu review", "afterReview": True})
+            review.append(d)
     # Jira (opcional): estado del ticket de cada PR mío
     for p in prs + merged + review:
         k = TICKET.search(p["title"]) or TICKET.search(p["branch"].upper())
@@ -511,6 +818,7 @@ def main():
         lst.sort(key=lambda p: (top[p["owner"]], p["createdAt"]), reverse=True)
     order(prs); order(review)
     merged.sort(key=lambda p: p["mergedAt"], reverse=True)
+    reviewed.sort(key=lambda p: p["reviewedAt"], reverse=True)
 
     groups = build_groups(prs, merged)
     view = mine_view(prs, groups)
@@ -525,7 +833,7 @@ def main():
             remind = [{"repo": p["repo"], "number": p["number"], "idleDays": p["idleDays"]} for p in stale]
             st["lastReminder"] = today; save(STATE, st)
 
-    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "review": review, "merged": merged, "mineView": view, "groups": groups, "watching": watching,
-                      "remind": remind, "accounts": logins, "failed": failed, "jira": bool(conf), "staleDays": stale_days, "mergedDays": merged_days}))
+    print(json.dumps({"error": "; ".join(errors) or None, "prs": prs, "review": review, "merged": merged, "reviewed": reviewed, "mineView": view, "groups": groups, "watching": watching,
+                      "remind": remind, "reviews": reviews_view(), "batchRunning": batch_running(), "accounts": logins, "failed": failed, "jira": bool(conf), "staleDays": stale_days, "mergedDays": merged_days, "reviewedDays": reviewed_days, "tlLogin": cfg.get("tlLogin", "")}))
 
 main()
