@@ -62,34 +62,18 @@ PlasmoidItem {
     Timer { id: toastTimer; interval: 3000; onTriggered: root.toast = "" }
     function showToast(t) { toast = t; toastTimer.restart() }
 
-    Plasmoid.icon: "view-list-tree"
+    Plasmoid.icon: Qt.resolvedUrl("icons/flujo.svg")
     toolTipMainText: "Flujo de tickets"
     toolTipSubText: errorMsg !== "" ? "⚠ " + errorMsg : tickets.length + " tickets · " + observed + " con review observado · " + paseCandidates.length + " listos para pase"
 
-    compactRepresentation: MouseArea {
+    preferredRepresentation: compactRepresentation
+
+    compactRepresentation: CompactIcon {
         onClicked: root.expanded = !root.expanded
-        Kirigami.Icon {
-            width: parent.width * 0.82; height: width
-            anchors { left: parent.left; top: parent.top }
-            source: "view-list-tree"; isMask: true; color: Kirigami.Theme.textColor
-        }
-        Rectangle {
-            visible: root.tickets.length > 0
-            anchors { right: parent.right; bottom: parent.bottom }
-            height: Math.max(14, parent.height * 0.5)
-            width: Math.max(height, badge.implicitWidth + 4)
-            radius: height / 2
-            color: root.observed > 0 ? "#e5484d" : "#2f81f7"
-            Text { id: badge; anchors.centerIn: parent; text: root.tickets.length
-                color: "white"; font.pixelSize: Math.max(10, parent.height * 0.72); font.bold: true; font.family: "DejaVu Sans" }
-        }
-        Rectangle {
-            visible: root.errorMsg !== ""
-            anchors { right: parent.right; top: parent.top }
-            width: Math.max(12, parent.height * 0.4); height: width; radius: width / 2
-            color: "#d98e04"
-            Text { anchors.centerIn: parent; text: "!"; color: "white"; font.bold: true; font.pixelSize: parent.height * 0.8; font.family: "DejaVu Sans" }
-        }
+        icon: Qt.resolvedUrl("icons/flujo.svg")
+        count: root.tickets.length
+        alert: root.observed > 0
+        dot: root.errorMsg !== "" ? "warn" : ""
     }
 
     fullRepresentation: ColumnLayout {

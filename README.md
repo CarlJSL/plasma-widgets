@@ -26,3 +26,7 @@ Plasma 6, Python 3 y, según el widget, `gh` (pr-tracker, flujo-tracker) o kitty
 ## Licencia
 
 MIT, ver `LICENSE`.
+
+## Estilo común
+
+Los iconos del panel son un juego propio (`shared/icons/`, mismo trazo en todos) y la insignia con el número y el punto de aviso vienen de un solo componente, `shared/CompactIcon.qml`, que usa los colores del tema. Plasma empaqueta cada widget por separado, así que `tools/sync-shared.sh` copia lo común dentro de cada uno (lo corren los `install.sh`). Edita siempre `shared/` y no las copias.

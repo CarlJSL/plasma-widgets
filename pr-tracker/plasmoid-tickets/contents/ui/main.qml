@@ -250,48 +250,18 @@ PlasmoidItem {
         return out.trim()
     }
 
-    Plasmoid.icon: "view-task"
+    Plasmoid.icon: Qt.resolvedUrl("icons/tickets.svg")
     toolTipMainText: "Mis tickets"
     toolTipSubText: errorMsg !== "" ? "⚠ " + errorMsg : active.length + " activos, " + staleCount + " sin movimiento\n" + blocks.length + " bloqueados, " + readyCount + " ya se pueden avanzar"
 
-    compactRepresentation: MouseArea {
+    preferredRepresentation: compactRepresentation
+
+    compactRepresentation: CompactIcon {
         onClicked: root.expanded = !root.expanded
-        Kirigami.Icon {
-            width: parent.width * 0.82; height: width
-            anchors { left: parent.left; top: parent.top }
-            source: "view-task"
-            isMask: true
-            color: Kirigami.Theme.textColor
-        }
-        Rectangle {
-            visible: root.errorMsg !== ""
-            anchors { right: parent.right; top: parent.top }
-            width: Math.max(12, parent.height * 0.4); height: width; radius: width / 2
-            color: "#d98e04"
-            Text { anchors.centerIn: parent; text: "!"; color: "white"; font.bold: true
-                font.pixelSize: parent.height * 0.8; font.family: "DejaVu Sans" }
-        }
-        // Tickets bloqueados cuyo bloqueo ya se resolvió: ya puedes avanzarlos
-        Rectangle {
-            visible: root.readyCount > 0
-            anchors { left: parent.left; bottom: parent.bottom }
-            height: Math.max(14, parent.height * 0.5)
-            width: Math.max(height, readyText.implicitWidth + 4)
-            radius: height / 2
-            color: "#2da44e"
-            Text { id: readyText; anchors.centerIn: parent; text: root.readyCount
-                color: "white"; font.pixelSize: Math.max(10, parent.height * 0.72); font.bold: true; font.family: "DejaVu Sans" }
-        }
-        Rectangle {
-            visible: root.active.length > 0
-            anchors { right: parent.right; bottom: parent.bottom }
-            height: Math.max(14, parent.height * 0.5)
-            width: Math.max(height, badge.implicitWidth + 4)
-            radius: height / 2
-            color: root.staleCount > 0 ? "#e5484d" : "#2f81f7"
-            Text { id: badge; anchors.centerIn: parent; text: root.active.length
-                color: "white"; font.pixelSize: Math.max(10, parent.height * 0.72); font.bold: true; font.family: "DejaVu Sans" }
-        }
+        icon: Qt.resolvedUrl("icons/tickets.svg")
+        count: root.active.length
+        alert: root.staleCount > 0
+        dot: root.errorMsg !== "" ? "warn" : (root.readyCount > 0 ? "ok" : "")
     }
 
     fullRepresentation: ColumnLayout {

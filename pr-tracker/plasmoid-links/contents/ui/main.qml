@@ -73,19 +73,14 @@ PlasmoidItem {
     Component.onCompleted: refresh()
     onExpandedChanged: if (expanded) { filter = ""; adding = false; refresh() }
 
-    Plasmoid.icon: "bookmarks"
+    Plasmoid.icon: Qt.resolvedUrl("icons/links.svg")
     toolTipMainText: "Mis links"
     toolTipSubText: links.length + " guardados"
     preferredRepresentation: compactRepresentation
 
-    compactRepresentation: MouseArea {
+    compactRepresentation: CompactIcon {
         onClicked: root.expanded = !root.expanded
-        Kirigami.Icon {
-            anchors.fill: parent
-            source: "bookmarks"
-            isMask: true
-            color: Kirigami.Theme.textColor
-        }
+        icon: Qt.resolvedUrl("icons/links.svg")
     }
 
     fullRepresentation: ColumnLayout {

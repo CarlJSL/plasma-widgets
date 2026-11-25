@@ -85,10 +85,16 @@ PlasmoidItem {
     onExpandedChanged: if (expanded) { filter = ""; refresh() }
     Timer { interval: 30000; running: root.expanded; repeat: true; onTriggered: root.refresh() }
 
-    Plasmoid.icon: "utilities-terminal"
+    Plasmoid.icon: Qt.resolvedUrl("icons/terminales.svg")
     toolTipMainText: "Historial de terminales"
     toolTipSubText: sessions.filter(s => s.open).length + " abiertas · " + sessions.length + " registradas"
     preferredRepresentation: compactRepresentation
+
+compactRepresentation: CompactIcon {
+        onClicked: root.expanded = !root.expanded
+        icon: Qt.resolvedUrl("icons/terminales.svg")
+        count: root.sessions.filter(s => s.open).length
+    }
 
     fullRepresentation: ColumnLayout {
         Layout.minimumWidth: Kirigami.Units.gridUnit * 28

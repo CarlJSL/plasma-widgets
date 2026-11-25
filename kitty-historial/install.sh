@@ -2,6 +2,7 @@
 # Instala el CLI, el gancho de kitty y el widget. Luego reinicia kitty (las terminales ya abiertas no se anotan).
 set -euo pipefail
 cd "$(dirname "$0")"
+"../tools/sync-shared.sh"
 install -Dm755 bin/kitty-historial "$HOME/.local/bin/kitty-historial"
 install -Dm644 watcher.py "$HOME/.config/kitty/historial_watcher.py"
 CONF="$HOME/.config/kitty/kitty.conf"
