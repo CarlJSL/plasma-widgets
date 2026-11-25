@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Instala los scripts y los widgets de Plasma. Luego: clic derecho en el panel > Añadir widgets > "Mis PRs" / "Mis tickets" / "Mis links".
+# Instala todos los widgets, o solo los que nombres:
+#   ./install.sh                      -> todos
+#   ./install.sh pr-tracker kitty-historial
 set -euo pipefail
 cd "$(dirname "$0")"
-install -Dm755 bin/my-prs.py "$HOME/.local/bin/my-prs"
-install -Dm755 bin/my-tickets.py "$HOME/.local/bin/my-tickets"
-install -Dm755 bin/my-links.py "$HOME/.local/bin/my-links"
-for dir in plasmoid plasmoid-tickets plasmoid-links; do
-  kpackagetool6 -t Plasma/Applet -i "$dir" 2>/dev/null || kpackagetool6 -t Plasma/Applet -u "$dir"
+ALL=(pr-tracker flujo-tracker kitty-historial)
+LIST=("$@"); [ ${#LIST[@]} -eq 0 ] && LIST=("${ALL[@]}")
+for w in "${LIST[@]}"; do
+  [ -x "$w/install.sh" ] || { echo "No existe el widget «$w». Disponibles: ${ALL[*]}" >&2; exit 1; }
+  echo "== $w"
+  "$w/install.sh"
 done
-echo "Listo. Si no aparecen los widgets: kquitapp6 plasmashell && kstart plasmashell"

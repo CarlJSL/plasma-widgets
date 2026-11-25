@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "io.personal.flujotracker",
+    "Name": "Flujo de tickets",
+    "Description": "En qué fase del flujo de desarrollo está cada ticket y el comando para seguir",
+    "Icon": "view-list-tree",
+    "Authors": [{ "Name": "CarlJSL" }],
+    "Category": "Development",
+    "License": "MIT",
+    "Version": "1.0"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}

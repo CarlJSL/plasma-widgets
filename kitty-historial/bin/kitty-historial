@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""kitty-historial: lee el registro que deja watcher.py y lo resume para el widget.
+  kitty-historial            -> JSON con sesiones (terminales) y comandos, de más nuevo a más viejo
+  kitty-historial open DIR   -> abre una terminal kitty en DIR"""
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+LOG = Path(os.environ.get("KITTY_HISTORIAL_LOG", Path.home() / ".local/share/kitty-historial/events.jsonl"))
+KEEP_DAYS = 90
+MAX_BYTES = 8_000_000
+
+
+def read_events():
+    out = []
+    try:
+        with LOG.open(encoding="utf-8") as f:
+            for line in f:
+                try: out.append(json.loads(line))
+                except ValueError: continue
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def compact(events):
+    """Si el registro crece demasiado, descarta lo anterior a KEEP_DAYS."""
+    try:
+        if LOG.stat().st_size < MAX_BYTES: return events
+    except OSError:
+        return events
+    cut = time.time() - KEEP_DAYS * 86400
+    keep = [e for e in events if e["t"] >= cut]
+    tmp = LOG.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in keep), encoding="utf-8")
+    tmp.replace(LOG)
+    return keep
+
+
+def alive(pid):
+    return Path(f"/proc/{pid}").exists()
+
+
+def summarize(events, limit_sessions=300, limit_cmds=600):
+    sessions, cmds, open_cmd = {}, [], {}
+    for e in events:
+        key = (e["pid"], e["win"])
+        s = sessions.get(key)
+        if e["ev"] == "open" or s is None:
+            if s is not None and e["ev"] == "open":  # id reutilizado tras reiniciar kitty
+                pass
+            s = sessions[key] = {"id": f'{e["pid"]}-{e["win"]}-{int(e["t"])}', "start": e["t"], "end": None, "cwd": e.get("cwd", ""),
+                                 "cwdFirst": e.get("cwd", ""), "branch": e.get("branch", ""), "title": e.get("title", ""),
+                                 "ncmds": 0, "last": [], "reason": "", "pid": e["pid"]}
+        if e.get("cwd"): s["cwd"] = e["cwd"]
+        if e.get("branch"): s["branch"] = e["branch"]
+        if e["ev"] == "cmd":
+            c = {"t": e["t"], "cmd": e.get("cmd", ""), "cwd": e.get("cwd", ""), "dur": None, "session": s["id"]}
+            cmds.append(c); open_cmd[key] = c
+            s["ncmds"] += 1; s["last"].append(e.get("cmd", ""))
+            s["last"] = s["last"][-5:]
+        elif e["ev"] == "end" and key in open_cmd:
+            open_cmd[key]["dur"] = round(e["t"] - open_cmd[key]["t"], 1); del open_cmd[key]
+        elif e["ev"] == "close":
+            s["end"] = e["t"]; s["reason"] = e.get("cause") or e.get("reason") or ""
+        s["updated"] = e["t"]
+    out = []
+    for s in sessions.values():
+        s["open"] = s["end"] is None and alive(s["pid"])
+        if s["end"] is None and not s["open"]:   # kitty murió sin avisar: se usa su última actividad
+            s["end"] = s["updated"]; s["reason"] = s["reason"] or "interrumpida"
+        out.append(s)
+    out.sort(key=lambda s: s["start"], reverse=True)
+    cmds.sort(key=lambda c: c["t"], reverse=True)
+    return out[:limit_sessions], cmds[:limit_cmds]
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "open":
+        d = os.path.expanduser(sys.argv[2])
+        if not os.path.isdir(d): d = str(Path.home())
+        subprocess.Popen(["kitty", "--directory", d], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("Terminal abierta en " + d); return
+    events = compact(read_events())
+    sessions, cmds = summarize(events)
+    print(json.dumps({"sessions": sessions, "commands": cmds, "now": time.time(), "logExists": LOG.exists()}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

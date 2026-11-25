@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "io.personal.kittyhistorial",
+    "Name": "Historial de terminales",
+    "Description": "Terminales de kitty que has abierto: carpeta, rama, duración y comandos",
+    "Icon": "utilities-terminal",
+    "Authors": [{ "Name": "CarlJSL" }],
+    "Category": "Development",
+    "License": "MIT",
+    "Version": "1.0"
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}
