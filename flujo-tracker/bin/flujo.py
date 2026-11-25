@@ -6,7 +6,11 @@ Solo lectura. Combina cuatro fuentes y no guarda estado propio:
 Imprime JSON; con --list imprime filas TSV para el selector de la terminal (`t`).
 
 Config opcional: ~/.config/flujo-tracker/config.json
-  {"worktrees": {"IN-1696": ["api-investor-io-IN-1588-tanda2"]}}   # ticket -> worktrees que no llevan su clave
+  {"worktrees": {"ABC-12": ["mi-repo-rama-larga"]},     # ticket -> worktrees que no llevan su clave
+   "org": "MiOrg",                                      # limita la búsqueda de PRs a esa organización de GitHub
+   "ticketKeys": "ABC|XYZ|PRD",                         # prefijos de las claves de ticket (por defecto, cualquier PREFIJO-123)
+   "releaseChecklist": "la lista «Antes de armar la card» de la skill de pases",
+   "auditStep": "autorreview y auditoría de seguridad"}            # textos que van en las frases para Claude
 Jira (sitio y credenciales): se toman de ~/.config/pr-tracker/config.json, igual que «Mis tickets».
 """
 import base64, json, re, subprocess, sys
@@ -20,11 +24,18 @@ CONFIG = HOME / ".config/flujo-tracker/config.json"
 OBSIDIAN = HOME / "Documentos/Notas/yop/Tickets"
 TEMPLATES = HOME / "Documentos/meta-harness/plantillas/ticket"
 WORKTREES = HOME / "Proyectos/worktrees"
-ORG = "INVERSIONESIO"
 JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
 FIELDS = ["summary", "status", "priority", "issuetype", "updated", "project", "issuelinks"]
-WT_RE = re.compile(r"^(.*?)-((?:ASDT|IN|MC|PRD)-.+)$")
-KEY_RE = re.compile(r"\b(?:ASDT|IN|MC|PRD)-\d+\b")
+def _load_cfg():
+    try: return json.loads(CONFIG.read_text())
+    except Exception: return {}
+_CFG = _load_cfg()
+ORG = _CFG.get("org", "")
+KEYS = _CFG.get("ticketKeys", "[A-Z][A-Z0-9]{1,9}")
+RELEASE = _CFG.get("releaseChecklist", "la lista de requisitos del pase")
+AUDIT = _CFG.get("auditStep", "autorreview y auditoría de seguridad")
+WT_RE = re.compile(r"^(.*?)-((?:" + KEYS + r")-.+)$")
+KEY_RE = re.compile(r"\b(?:" + KEYS + r")-\d+\b")
 
 PHASES = {1: "Nuevo", 2: "Análisis y plan", 3: "Implementación", 4: "Review", 5: "QA", 6: "Pase a producción", 7: "Cierre"}
 
@@ -89,8 +100,9 @@ def open_prs():
         if not tok:
             continue
         env = {"GH_TOKEN": tok}
-        raw = sh(["gh", "search", "prs", "--author", acct, "--state", "open", "--owner", ORG, "--limit", "60",
-                  "--json", "number,title,url,repository,body"], env)
+        cmd = ["gh", "search", "prs", "--author", acct, "--state", "open"] + (["--owner", ORG] if ORG else []) + \
+              ["--limit", "60", "--json", "number,title,url,repository,body"]
+        raw = sh(cmd, env)
         try:
             found = json.loads(raw or "[]")
         except ValueError:
@@ -142,7 +154,7 @@ def worktrees_of(key, folder_text, extra):
 
 def pr_matches(p, key, mine, in_review=True):
     """Clave en el título o la rama: PR propio del ticket. En el cuerpo: solo si es una lista de tanda, o sea,
-    el cuerpo también nombra la clave del título (un «depende de ASDT-120» suelto no cuenta)."""
+    el cuerpo también nombra la clave del título (un «depende de ABC-120» suelto no cuenta)."""
     if key in p["title_keys"]:
         return True
     if key not in p["body_keys"] or not in_review:
@@ -169,8 +181,8 @@ def classify(t, prs, extra, mine):
 
     if t["type"] == "Pase a producción":
         phase, detail = 6, t["status"]
-        phrase = (f"Revisa el pase a prod {key}: lee el ticket, los tickets que implementa, comentarios y aprobaciones, y compáralo con la lista de "
-                  "«Antes de armar la card» de invio-release-ticket. Dime qué falta; no publiques nada sin mi OK.")
+        phrase = (f"Revisa el pase a prod {key}: lee el ticket, los tickets que implementa, comentarios y aprobaciones, y compáralo con "
+                  f"{RELEASE}. Dime qué falta; no publiques nada sin mi OK.")
     elif t["prd"] and t["prd"]["cat"] == "done":
         phase, detail = 7, f"{t['prd']['key']} desplegado"
         phrase = f"El pase {t['prd']['key']} ya está desplegado. Verifica si {key} puede cerrarse (criterios, comentarios, dependencias, flag) y propón comentario y transición sin publicar."
@@ -178,11 +190,11 @@ def classify(t, prs, extra, mine):
         phase = 6
         if t["prd"]:
             detail = f"{t['prd']['key']} · {t['prd']['status']}"
-            phrase = (f"Revisa el pase a prod {t['prd']['key']} de {key}: estado, aprobaciones y lo que falta según la lista de "
-                      "invio-release-ticket. No publiques nada sin mi OK.")
+            phrase = (f"Revisa el pase a prod {t['prd']['key']} de {key}: estado, aprobaciones y lo que falta según "
+                      f"{RELEASE}. No publiques nada sin mi OK.")
         else:
             detail = "sin pase PRD vinculado"
-            phrase = (f"Arma el pase a prod de {key}. Revisa «Antes de armar la card», "
+            phrase = (f"Arma el pase a prod de {key}. Revisa {RELEASE}, "
                       "muéstrame el borrador y espera mi OK antes de crear nada en Jira o Slack.")
     elif "qa" in status.replace("code", ""):
         phase, detail = 5, "esperando QA"
@@ -197,7 +209,7 @@ def classify(t, prs, extra, mine):
             detail = f"#{p['number']} {p['repo']} · {estado}" + (f" (+{len(my_prs) - 1} PR más)" if len(my_prs) > 1 else "")
             if estado == "observado":
                 phrase = (f"Observado en #{p['number']} ({p['repo']}): lee el review completo, aplica las correcciones en este worktree con tests y volumen medidos, "
-                          "autorreview e invio-audit, y pídeme OK antes del push.")
+                          f"{AUDIT}, y pídeme OK antes del push.")
             else:
                 phrase = f"Retomamos {key}: revisa #{p['number']} ({p['repo']}) — review, CI, conflictos con qas — y dime qué sigue."
         else:

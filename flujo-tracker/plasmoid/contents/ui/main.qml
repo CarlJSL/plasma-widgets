@@ -168,7 +168,7 @@ PlasmoidItem {
                     text: "Úsalo cuando te asignan un ticket y todavía no tiene carpeta en Obsidian." }
                 PlasmaComponents.TextField {
                     Layout.fillWidth: true
-                    placeholderText: "Clave del ticket, por ejemplo ASDT-500"
+                    placeholderText: "Clave del ticket, por ejemplo ABC-123"
                     text: root.newKey; onTextChanged: root.newKey = text
                 }
                 Step { number: 1; text: "Abre una terminal y pega este comando:"; code: "ticket --agent nuevo-ticket"
