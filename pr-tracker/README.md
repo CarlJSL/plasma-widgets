@@ -84,8 +84,8 @@ Un lanzador de links: guardas los que abres a diario (tableros, dashboards, docs
    ```
 3. **Clona el repo:**
    ```sh
-   git clone https://github.com/CarlJSL/pr-tracker.git
-   cd pr-tracker
+   git clone https://github.com/CarlJSL/plasma-widgets.git
+   cd plasma-widgets/pr-tracker
    ```
 4. **Prueba el script** antes de instalar el widget; debe imprimir tus PRs en JSON:
    ```sh
