@@ -31,6 +31,7 @@ PR_FIELDS = """
   number title url isDraft createdAt updatedAt mergeable reviewDecision
   baseRefName headRefName headRefOid author { login }
   latestReviews(first: 10) { nodes { state submittedAt author { login } commit { oid } } }
+  reviews(last: 40) { nodes { state submittedAt author { login } commit { oid } } }
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
   repository { nameWithOwner name }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -104,15 +105,24 @@ def status(pr):
         return "aprobado", "Aprobado"
     return "review", "Esperando review"
 
+def latest_reviews(pr):
+    """Último review enviado de cada persona, con su fecha y si fue sobre el último commit. Se lee del historial (`reviews`) y no de
+    `latestReviews`: GitHub saca de ahí a quien se le vuelve a pedir review, y su review anterior se perdería."""
+    last = {}
+    for x in (pr.get("reviews") or pr["latestReviews"])["nodes"]:
+        if not x.get("author") or x["state"] == "PENDING" or not x.get("submittedAt"): continue
+        k = x["author"]["login"]
+        if k not in last or x["submittedAt"] >= last[k]["submittedAt"]: last[k] = x
+    return [{"login": k, "state": x["state"], "at": x["submittedAt"],
+             "current": (x["commit"] or {}).get("oid") == pr.get("headRefOid")} for k, x in last.items()]
+
 def base(pr, login):
     return {"account": login, "repo": pr["repository"]["name"], "owner": pr["repository"]["nameWithOwner"],
             "number": pr["number"], "title": pr["title"], "url": pr["url"],
             "author": (pr["author"] or {}).get("login", ""), "branch": pr["headRefName"], "base": pr["baseRefName"],
             "sha": pr.get("headRefOid", ""), "createdAt": pr["createdAt"], "updatedAt": pr["updatedAt"], "ageDays": days_since(pr["createdAt"]),
             "idleDays": days_since(pr["updatedAt"]),
-            "reviews": [{"login": x["author"]["login"], "state": x["state"], "at": x.get("submittedAt"),
-                         "current": (x["commit"] or {}).get("oid") == pr.get("headRefOid")}
-                        for x in pr["latestReviews"]["nodes"] if x.get("author")],
+            "reviews": latest_reviews(pr),
             "requested": [((x.get("requestedReviewer") or {}).get("login") or (x.get("requestedReviewer") or {}).get("name") or "")
                           for x in (pr.get("reviewRequests") or {}).get("nodes", [])]}
 
@@ -684,10 +694,114 @@ def batch_run(args):
 
 
 # ---------- principal ----------
+# ---------- reportes ----------
+# A quién le toca cada PR. Todo se mide contra el ÚLTIMO commit del PR: una review solo cuenta si es sobre ese commit.
+# El orden del equipo es compañero primero y TL al final, así que:
+#   Mis PRs (autor: yo)
+#     · un review mío no aplica; si el TL ya aprobó el último commit, está listo y no se lista;
+#     · observado (cambios pedidos vigentes), conflictos o CI fallando       -> me toca a mí
+#     · el compañero no tiene un approve del último commit                   -> le toca al compañero
+#         (sin ninguna review, o con una vieja: re-review)
+#     · el compañero aprobó el último commit y el TL no                      -> le toca al TL
+#         (el TL pidió cambios sobre ese mismo commit: espera al autor, no se lista)
+#   PRs que revisé (autor: otro, abiertos y no borrador)
+#     · mi review no es sobre el último commit (hay commits nuevos)          -> me toca a mí
+#     · pedí cambios sobre el último commit                                   -> le toca al autor
+#     · aprobé el último commit y el TL no tiene un approve vigente           -> le toca al TL
+_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+def _cuando(iso, ahora=None):
+    """«hoy a las 17:12», «ayer», «el 17» (o «el 17 de octubre» si es de otro mes)."""
+    d = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    hoy = (ahora or datetime.now()).astimezone().date()
+    if d.date() == hoy: return f"hoy a las {d:%H:%M}"
+    if (hoy - d.date()).days == 1: return "ayer"
+    return f"el {d.day}" + ("" if (d.year, d.month) == (hoy.year, hoy.month) else f" de {_MESES[d.month - 1]}")
+
+def _linea(p, nota=""):
+    m = re.match(r"^\s*\w+(?:\(([^)]*)\))?!?:\s*(.+)$", p["title"])
+    desc = f"{m.group(1)} ({m.group(2)})" if m and m.group(1) and TICKET.fullmatch(m.group(1).strip()) else p["title"]
+    return f"- {p['repo']}#{p['number']}, {desc}" + (f". {nota}" if nota else "") + f": {p['url']}"
+
+def _review_de(p, login):
+    for r in p.get("reviews") or []:
+        if r["login"].lower() == login.lower(): return r
+    return None
+
+def report_reviews(data, cfg, ahora=None):
+    """«Estado de los code review y de mis PRs»: qué le toca a cada persona, listo para pegar en Slack."""
+    tl = cfg.get("tlLogin", "")
+    peer = cfg.get("peerLogin", "")
+    names = cfg.get("people", {})
+    nm = lambda login, otro: names.get(login) or login or otro
+    tl_n, peer_n = nm(tl, "el TL"), nm(peer, "el compañero")
+    VERBO = {"APPROVED": "Aprobó", "CHANGES_REQUESTED": "Pidió cambios", "COMMENTED": "Comentó"}
+
+    tl_revisados, peer_sin, peer_re, tl_mios, mios = [], [], [], [], []
+    for p in data.get("prs", []):
+        if p.get("status") == "draft": continue
+        rt = _review_de(p, tl) if tl else None
+        if rt and rt["state"] == "APPROVED" and rt["current"]: continue          # listo
+        if p["status"] in ("observado", "conflicto", "ci"):
+            mios.append(_linea(p, p.get("label", ""))); continue
+        rp = _review_de(p, peer) if peer else next((r for r in p.get("reviews", []) if r["login"] != tl and r["login"] != p["account"]), None)
+        if not rp or rp["state"] == "DISMISSED":
+            peer_sin.append(_linea(p)); continue
+        if not rp["current"]:
+            extra = "" if rp["state"] == "APPROVED" else f"Su review fue «{VERBO.get(rp['state'], rp['state']).lower()}», antes de los últimos commits"
+            peer_re.append(_linea(p, extra)); continue
+        if rp["state"] == "CHANGES_REQUESTED":                                   # observado vigente (ya cubierto arriba)
+            mios.append(_linea(p, "Observado")); continue
+        if rt and rt["state"] == "CHANGES_REQUESTED" and rt["current"]: continue  # el TL espera al autor
+        nota = ""
+        if rt: nota = f"{VERBO.get(rt['state'], rt['state'])} {_cuando(rt['at'], ahora)}" + (", sobre un commit anterior" if rt["state"] == "APPROVED" else "")
+        tl_mios.append(_linea(p, nota))
+    for p in data.get("reviewed", []):
+        if p.get("prState") != "OPEN" or p.get("isDraft") or p.get("myState") != "APPROVED" or p.get("newCommits"): continue
+        rt = _review_de(p, tl) if tl else None
+        if rt and rt["current"] and rt["state"] in ("APPROVED", "CHANGES_REQUESTED"): continue   # ya aprobó, o espera al autor
+        nota = ""
+        if rt: nota = f"{VERBO.get(rt['state'], rt['state'])} {_cuando(rt['at'], ahora)}" + (", sobre un commit anterior" if rt["state"] == "APPROVED" else "")
+        tl_revisados.append(_linea(p, nota))
+
+    out = ["Buenas el estado de los code review y de mis prs que quedan pendientes a revisar"]
+    n = 0
+    def sec(titulo, bloques):
+        nonlocal n
+        bloques = [(h, l) for h, l in bloques if l]
+        if not bloques: return
+        n += 1
+        out.append(f"\n{n}. {titulo}")
+        for h, l in bloques:
+            if h: out.append(f"\n{h}")
+            out.extend(l)
+    sec(f"{tl_n} falta tu review", [("", tl_revisados)])
+    sec(f"Mis PRs que falta que revise {peer_n}", [("Sin ninguna review todavía:", peer_sin), (f"Su review es de un commit anterior (re-review de {peer_n}):", peer_re)])
+    sec(f"Mis PRs que falta que revise {tl_n}", [("", tl_mios)])
+    sec("Por atender de mi lado antes de pedir review (observados, conflictos o CI)", [("", mios)])
+    if n == 0: out.append("\nNo queda nada pendiente.")
+    return "\n".join(out)
+
+def report_cmd(args):
+    """report TIPO: imprime el reporte (hoy: «revisiones»), con datos frescos de GitHub."""
+    kind = args[0] if args else "revisiones"
+    cfg = load(CONFIG, {})
+    raw = subprocess.run([sys.executable, os.path.abspath(__file__)], capture_output=True, text=True, timeout=180).stdout
+    data = json.loads(raw)
+    if data.get("error"): print("Error: " + str(data["error"])[:200]); sys.exit(1)
+    if kind != "revisiones": print("Reporte desconocido: " + kind); sys.exit(1)
+    print(report_reviews(data, cfg))
+
+
 def main():
     argv = sys.argv[1:]
     if argv and argv[0] == "watch":
         watch_cmd(argv[1:]); return
+    if argv and argv[0] == "report":
+        try: report_cmd(argv[1:])
+        except Exception as e:
+            print("Error: " + str(e)[:200]); sys.exit(1)
+        return
     if argv and argv[0] == "rereview":
         try: rereview(argv[1], argv[2])
         except subprocess.CalledProcessError as e:

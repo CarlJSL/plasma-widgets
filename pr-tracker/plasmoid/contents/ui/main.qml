@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls as QQC
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents
@@ -181,48 +182,10 @@ PlasmoidItem {
     }
 
 
-    // Estado de aprobaciones frente al TL: regla "si hay commits después del approve del compañero, vuelve primero a él".
-    function approvalSummary() {
-        const tl = tlLogin.toLowerCase()
-        const isTl = r => r.login.toLowerCase() === tl
-        const line = (p, extra) => "- " + p.repo + " #" + p.number + " " + p.title + (extra ? " — " + extra : "") + "\n  " + p.url + "\n"
-        const sec = (title, items) => items.length ? "\n" + title + " (" + items.length + ")\n" + items.join("") : ""
-        const names = rs => rs.map(r => "@" + r.login).join(", ")
-        const A = [], B = [], C = [], D = [], E = [], F = []
-        let tlOk = 0
-        for (const p of prs) {
-            if (p.status === "draft") continue
-            const rs = p.reviews || []
-            if (rs.some(r => isTl(r) && r.state === "APPROVED")) { tlOk++; continue }
-            const peers = rs.filter(r => !isTl(r) && r.login !== p.account)
-            if (["observado", "conflicto", "ci"].includes(p.status)) { F.push(line(p, p.label)); continue }
-            const stale = peers.filter(r => (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED") && !r.current)
-            const ok = peers.filter(r => r.state === "APPROVED" && r.current)
-            if (stale.length) B.push(line(p, "hubo commits después del review de " + names(stale)))
-            else if (ok.length) A.push(line(p, "aprobado por " + names(ok)))
-            else C.push(line(p, p.status === "probando" ? "CI en curso, sin approve vigente del compañero" : "sin approve vigente del compañero"))
-        }
-        for (const p of reviewed) {
-            if (p.prState !== "OPEN" || p.isDraft || p.myState !== "APPROVED") continue
-            const rs = p.reviews || []
-            if (rs.some(r => isTl(r) && r.state === "APPROVED")) continue
-            if (p.newCommits) E.push(line(p, "@" + p.author + " subió commits tras mi approve: me toca re-review antes de pedirlo"))
-            else D.push(line(p, "@" + p.author + ", ya lo aprobé yo"))
-        }
-        let out = "Aprobaciones pendientes (" + new Date().toLocaleDateString("es") + ")\n"
-        out += sec("Mis PRs listos para pedirle la aprobación al TL", A)
-        out += sec("Mis PRs: vuelven primero al compañero (commits después de su approve)", B)
-        out += sec("Mis PRs sin approve vigente del compañero", C)
-        out += sec("Mis PRs por atender antes (observados, conflictos o CI)", F)
-        out += sec("PRs que revisé y aprobé: falta la aprobación del TL", D)
-        out += sec("PRs que revisé pero tuvieron commits nuevos: me toca re-review primero", E)
-        if (tlOk) out += "\n(" + tlOk + " de mis PRs ya tienen la aprobación del TL y no se listan)\n"
-        return out.trim()
-    }
-    function copyApprovals() {
-        if (tlLogin === "") { showToast("Pon el login de GitHub de tu TL en \"tlLogin\" de ~/.config/pr-tracker/config.json"); return }
-        clip.text = approvalSummary(); clip.selectAll(); clip.copy()
-        showToast("Resumen de aprobaciones copiado")
+    // Reportes (texto listo para pegar): los arma `my-prs report <tipo>` con datos frescos de GitHub.
+    function copyReport(kind) {
+        showToast("Armando el reporte…")
+        runner.connectSource(cli + " report " + kind + " # " + Date.now())
     }
 
     function copySummary() {
@@ -286,6 +249,10 @@ PlasmoidItem {
             else if (source.indexOf(" review ") >= 0) { root.showToast(out); }
             else if (source.indexOf(" codereview ") >= 0) { root.showToast(out); }
             else if (source.indexOf(" resolve ") >= 0) { root.showToast(out); }
+            else if (source.indexOf(" report ") >= 0) {
+                if (out.indexOf("Error") === 0 || out === "") { root.showToast(out || "No se pudo armar el reporte"); return }
+                root.copyText(out); root.showToast("Reporte copiado")
+            }
             else if (source.indexOf(" batch ") >= 0) { root.showToast(out); root.refresh() }
             else if (source.indexOf(" batch-stop ") >= 0) { root.showToast(out); root.refresh() }
             else if (source.indexOf(" watch add ") >= 0) { root.showToast(out.startsWith("Siguiendo") ? "Siguiendo PR" : (out || "No se pudo seguir")); root.refresh() }
@@ -406,11 +373,16 @@ PlasmoidItem {
                     Layout.fillWidth: true
                     Item { Layout.fillWidth: true }
                     PlasmaComponents.Button {
-                        icon.name: "emblem-approved"
-                        text: "Pendientes de aprobación"
+                        icon.name: "document-send"
+                        text: "Reportes"
                         enabled: root.prs.length > 0 || root.reviewed.length > 0
-                        onClicked: root.copyApprovals()
-                        PlasmaComponents.ToolTip { text: "Copia qué PRs (míos y los que revisé) esperan re-review del compañero o la aprobación del TL" }
+                        onClicked: reportsMenu.open()
+                        PlasmaComponents.ToolTip { text: "Copia un reporte listo para pegar en Slack" }
+                        QQC.Menu {
+                            id: reportsMenu
+                            y: parent.height
+                            QQC.MenuItem { text: "Estado de code review (para el TL)"; onTriggered: root.copyReport("revisiones") }
+                        }
                     }
                     PlasmaComponents.Button {
                         icon.name: root.copied ? "dialog-ok" : "edit-copy"
