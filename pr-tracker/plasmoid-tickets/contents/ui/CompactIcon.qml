@@ -31,8 +31,9 @@ MouseArea {
             height: Math.max(11, box.height * 0.42)
             width: Math.max(height, label.implicitWidth + height * 0.5)
             radius: height / 2
-            color: ctl.alert ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.highlightColor
-            border { width: 1; color: Kirigami.Theme.backgroundColor }
+            // Colores fijos (no del tema): el de acento del tema se pierde sobre paneles azules; el aro del color del texto la separa del fondo.
+            color: ctl.alert ? "#e5484d" : "#2f81f7"
+            border { width: 1.5; color: Kirigami.Theme.textColor }
             Text {
                 id: label
                 anchors.centerIn: parent
@@ -45,8 +46,8 @@ MouseArea {
             visible: ctl.dot !== ""
             anchors { right: parent.right; top: parent.top }
             width: Math.max(7, box.height * 0.3); height: width; radius: width / 2
-            color: ctl.dot === "ok" ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.neutralTextColor
-            border { width: 1; color: Kirigami.Theme.backgroundColor }
+            color: ctl.dot === "ok" ? "#2da44e" : "#d98e04"
+            border { width: 1.5; color: Kirigami.Theme.textColor }
         }
     }
 }

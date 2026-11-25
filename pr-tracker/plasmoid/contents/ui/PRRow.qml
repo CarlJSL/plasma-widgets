@@ -21,6 +21,29 @@ PlasmaComponents.ItemDelegate {
     property string extraIcon: ""
     property string extraTip: ""
 
+    // Quién ya revisó el PR (y si su review sigue vigente) y a quién se le pidió y no ha respondido.
+    readonly property var chips: {
+        const out = [], seen = {}
+        const me = pr.account
+        const MES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]
+        const fecha = iso => { if (!iso) return ""; const d = new Date(iso); return d.getDate() + " " + MES[d.getMonth()] }
+        for (const r of (pr.reviews || [])) {
+            seen[r.login] = true
+            const quien = r.login === me ? "tú" : "@" + r.login
+            const t = ({ APPROVED: ["✓", "aprobó", "#2da44e"], CHANGES_REQUESTED: ["✗", "pidió cambios", "#e5484d"],
+                         COMMENTED: ["•", "comentó", "#8b949e"], DISMISSED: ["•", "review descartado", "#8b949e"] })[r.state]
+            if (!t) continue
+            const tip = quien + " " + t[1] + (r.at ? " el " + fecha(r.at) : "")
+                + (r.current ? ", sobre el último commit." : ". Hubo commits después de ese review: ya no cuenta.")
+            out.push({ text: t[0] + " " + quien + (r.current ? "" : " · viejo"), color: t[2], faded: !r.current, tip: tip })
+        }
+        for (const l of (pr.requested || [])) {
+            if (!l || seen[l] || l === me) continue
+            out.push({ text: "○ " + l + " pendiente", color: "#8b949e", faded: false, tip: "Se le pidió review a " + l + " y todavía no responde." })
+        }
+        return out
+    }
+
     signal copyLink(string url)
     signal openChecks(string url)
     signal reReview(string account, string url)
@@ -70,6 +93,29 @@ PlasmaComponents.ItemDelegate {
                     visible: row.pr.stale === true
                     text: "sin movimiento " + row.pr.idleDays + " d"
                     color: "#d98e04"; font: Kirigami.Theme.smallFont
+                }
+            }
+            Flow {
+                Layout.fillWidth: true; spacing: Kirigami.Units.smallSpacing
+                visible: row.chips.length > 0
+                Repeater {
+                    model: row.chips
+                    delegate: Rectangle {
+                        radius: height / 2
+                        height: chipLabel.implicitHeight + 2
+                        width: chipLabel.implicitWidth + Kirigami.Units.smallSpacing * 2
+                        color: Qt.rgba(Qt.color(modelData.color).r, Qt.color(modelData.color).g, Qt.color(modelData.color).b, 0.18)
+                        border { width: 1; color: Qt.rgba(Qt.color(modelData.color).r, Qt.color(modelData.color).g, Qt.color(modelData.color).b, 0.55) }
+                        opacity: modelData.faded ? 0.6 : 1
+                        PlasmaComponents.Label {
+                            id: chipLabel
+                            anchors.centerIn: parent
+                            text: modelData.text; font: Kirigami.Theme.smallFont
+                            color: modelData.color
+                        }
+                        HoverHandler { id: chipHover }
+                        PlasmaComponents.ToolTip { visible: chipHover.hovered; text: modelData.tip }
+                    }
                 }
             }
         }

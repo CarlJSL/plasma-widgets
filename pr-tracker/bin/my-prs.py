@@ -30,7 +30,8 @@ JIRA_ENV = HOME / ".config/pr-tracker/jira.env"  # configurable con "jiraEnv" en
 PR_FIELDS = """
   number title url isDraft createdAt updatedAt mergeable reviewDecision
   baseRefName headRefName headRefOid author { login }
-  latestReviews(first: 10) { nodes { state author { login } commit { oid } } }
+  latestReviews(first: 10) { nodes { state submittedAt author { login } commit { oid } } }
+  reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
   repository { nameWithOwner name }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
 """
@@ -109,9 +110,11 @@ def base(pr, login):
             "author": (pr["author"] or {}).get("login", ""), "branch": pr["headRefName"], "base": pr["baseRefName"],
             "sha": pr.get("headRefOid", ""), "createdAt": pr["createdAt"], "updatedAt": pr["updatedAt"], "ageDays": days_since(pr["createdAt"]),
             "idleDays": days_since(pr["updatedAt"]),
-            "reviews": [{"login": x["author"]["login"], "state": x["state"],
+            "reviews": [{"login": x["author"]["login"], "state": x["state"], "at": x.get("submittedAt"),
                          "current": (x["commit"] or {}).get("oid") == pr.get("headRefOid")}
-                        for x in pr["latestReviews"]["nodes"] if x.get("author")]}
+                        for x in pr["latestReviews"]["nodes"] if x.get("author")],
+            "requested": [((x.get("requestedReviewer") or {}).get("login") or (x.get("requestedReviewer") or {}).get("name") or "")
+                          for x in (pr.get("reviewRequests") or {}).get("nodes", [])]}
 
 TICKET = re.compile(r"\b([A-Z][A-Z0-9]{1,9}-\d+)\b")
 def ticket_of(pr):
