@@ -867,16 +867,41 @@ def report_revisados(reviewed, cfg, ahora=None, horas=24):
     if n == 0: out.append("\nNo revisé ningún PR en ese tiempo.")
     return "\n".join(out)
 
+def report_aprobados_tl(reviewed, cfg, ahora=None):
+    """Tickets cuyos PRs ya aprobé (sobre el último commit) y que aún no pasan por el TL, agrupados por ticket."""
+    tl = cfg.get("tlLogin", "")
+    names = cfg.get("people", {})
+    tl_n = names.get(tl) or tl or "el TL"
+    VERBO = {"APPROVED": "aprobó", "CHANGES_REQUESTED": "pidió cambios", "COMMENTED": "comentó"}
+    tickets = {}
+    for p in reviewed:
+        if p.get("prState") != "OPEN" or p.get("isDraft") or p.get("myState") != "APPROVED" or p.get("newCommits"): continue
+        rt = _review_de(p, tl) if tl else None
+        if rt and rt["current"] and rt["state"] in ("APPROVED", "CHANGES_REQUESTED"): continue
+        nota = ""
+        if rt: nota = f"{tl_n} {VERBO.get(rt['state'], rt['state'])} {_cuando(rt['at'], ahora)}" + (", sobre un commit anterior" if rt["state"] == "APPROVED" else "")
+        k = ticket_of(p) or "Sin ticket"
+        t = tickets.setdefault(k, {"titulo": p["title"], "prs": []})
+        t["prs"].append(f"{p['repo']}#{p['number']}" + (f" ({nota})" if nota else "") + f": {p['url']}")
+    out = [f"{tl_n}, estos tickets ya los aprobé y falta tu review:"]
+    for k, d in tickets.items():
+        m = re.match(r"^\s*\w+(?:\([^)]*\))?!?:\s*(.+)$", d["titulo"])
+        out += ["", f"- {k} ({m.group(1) if m else d['titulo']})"] + [f"  • {x}" for x in d["prs"]]
+    if not tickets: out.append("\nNo hay ninguno pendiente.")
+    return "\n".join(out)
+
 def report_cmd(args):
     """report TIPO: imprime el reporte (hoy: «revisiones»), con datos frescos de GitHub."""
     kind = args[0] if args else "revisiones"
     cfg = load(CONFIG, {})
-    if kind not in ("revisiones", "tickets", "tickets-review", "revisados"): print("Reporte desconocido: " + kind); sys.exit(1)
+    if kind not in ("revisiones", "tickets", "tickets-review", "revisados", "aprobados-tl"): print("Reporte desconocido: " + kind); sys.exit(1)
     raw = subprocess.run([sys.executable, os.path.abspath(__file__)], capture_output=True, text=True, timeout=180).stdout
     data = json.loads(raw)
     if data.get("error"): print("Error: " + str(data["error"])[:200]); sys.exit(1)
     if kind == "revisiones":
         print(report_reviews(data, cfg)); return
+    if kind == "aprobados-tl":
+        print(report_aprobados_tl(data.get("reviewed", []), cfg)); return
     if kind == "revisados":
         print(report_revisados(data.get("reviewed", []), cfg)); return
     if kind == "tickets-review":

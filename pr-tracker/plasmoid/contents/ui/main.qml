@@ -385,6 +385,7 @@ PlasmoidItem {
                             QQC.MenuItem { text: "Estado de mis tickets (para el TL)"; onTriggered: root.copyReport("tickets") }
                             QQC.MenuItem { text: "Tickets que esperan review o re-review"; onTriggered: root.copyReport("tickets-review") }
                             QQC.MenuItem { text: "PRs que revisé en las últimas 24 h"; onTriggered: root.copyReport("revisados") }
+                            QQC.MenuItem { text: "Tickets que aprobé y faltan del TL"; onTriggered: root.copyReport("aprobados-tl") }
                         }
                     }
                     PlasmaComponents.Button {
