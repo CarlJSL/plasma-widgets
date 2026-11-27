@@ -12,7 +12,7 @@ Widget de **KDE Plasma 6** y atajo `t` de fish que muestran **en qué fase del f
 | 3 · Implementación | Hay worktree y no hay PR | `wt <repo> <CLAVE>` |
 | 4 · Review | PR abierto (esperando, observado) o Jira en CODE REVIEW | `wt …` |
 | 4 · Aprobado | PR aprobado o `estado_trabajo: aprobado`: merge, deploy de qas, `pruebas.md` §8 y peso | `wt …` |
-| 5 · QA | Jira en EN QA, o `estado_trabajo: validacion-dev` (lo valida el dev en qas) | `ticket` |
+| 5 · QA | Jira en EN QA, o `estado_trabajo: validacion-dev` (lo valida el dev en qas) | `ticket --agent evidencia` (evidencia en qas) |
 | 6 · Pase a producción | READY TO DEPLOY sin PR abierto, PRD vinculado o el propio PRD | `ticket --agent pase` |
 | 7 · Cierre | El PRD vinculado ya está desplegado | `ticket` |
 
@@ -39,10 +39,11 @@ Jira se toma de `~/.config/pr-tracker/config.json`.
 
 ## Uso
 
-El widget abre en una pantalla de inicio con cuatro acciones:
+El widget abre en una pantalla de inicio con cinco acciones:
 
 - **Empezar un ticket nuevo:** escribes la clave y te da el comando (`ticket --agent nuevo-ticket`) y la frase, con los pasos y lo que Claude hará.
 - **Crear un pase a producción:** marcas los tickets listos (READY TO DEPLOY sin pase) y te da el comando (`ticket --agent pase`) y la frase con esas claves, más lo que el agente comprobará.
+- **Sacar evidencia de un ticket:** escribes la clave (o eliges uno en implementación, review o QA), marcas qas o local y, si quieres, qué mostrar; te da el comando (`ticket --agent evidencia`) y la frase. El agente propone el plan por criterio, captura (pantallas por tamaño o llamadas a la API con datos tapados), te muestra cada imagen y adjunta y comenta en Jira solo con tu OK.
 - **Seguir con un ticket:** tus tickets por fase; cada uno con botones visibles de comando y frase.
 - **Mis pases a producción:** estado de los PRD que tienes asignados.
 

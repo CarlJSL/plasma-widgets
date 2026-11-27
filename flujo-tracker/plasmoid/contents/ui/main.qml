@@ -12,8 +12,11 @@ PlasmoidItem {
     property string errorMsg: ""
     property bool loading: false
     property string toast: ""
-    property string view: "home"          // home | nuevo | pase | seguir | pases
+    property string view: "home"          // home | nuevo | pase | evidencia | seguir | pases
     property string newKey: ""
+    property string evKey: ""
+    property string evEntorno: "qas"      // qas | local
+    property string evQue: ""
     property string extraKeys: ""
     property var picked: ({})
     readonly property string cmd: "python3 $HOME/.local/bin/flujo"
@@ -31,11 +34,18 @@ PlasmoidItem {
     readonly property string phraseNuevo: "Nuevo ticket " + (newKey.trim() !== "" ? newKey.trim().toUpperCase() : "<CLAVE>") +
         ". Léelo por MCP con descripción, criterios y todos los comentarios. Crea su carpeta en Obsidian (vista previa primero), " +
         "completa el snapshot de Jira y redacta analisis.md en solo lectura."
+    readonly property var evCandidates: tickets.filter(t => t.phase >= 3 && t.phase <= 5 && t.type !== "Pase a producción")
+    readonly property string phraseEvidencia: "Saca la evidencia de " + (evKey.trim() !== "" ? evKey.trim().toUpperCase() : "<CLAVE>") +
+        (evEntorno === "qas" ? " en qas" : " en local (levanta el worktree con entorno.py; base scratch, sin datos reales)") +
+        (evQue.trim() !== "" ? ". Quiero mostrar: " + evQue.trim() : "") +
+        ". Lee los criterios y pruebas.md §8, comprueba qué está desplegado, propón el plan de evidencia por criterio, captura, " +
+        "revísala conmigo y, solo con mi OK y uno por uno, adjúntala y comenta en Jira."
     readonly property string phrasePase: "Arma el pase a prod de " + (paseKeys.length ? paseKeys.join(", ") : "<CLAVES>") +
         ". Revisa «Antes de armar la card», muéstrame el borrador y espera mi OK antes de crear nada en Jira o Slack."
 
     function title() {
         return ({ home: "¿Qué quieres hacer?", nuevo: "Empezar un ticket nuevo", pase: "Crear un pase a producción",
+                  evidencia: "Sacar evidencia de un ticket",
                   seguir: "Seguir con un ticket", pases: "Mis pases a producción" })[view]
     }
 
@@ -121,6 +131,12 @@ PlasmoidItem {
                 onClicked: root.view = "pase"
             }
             ActionCard {
+                iconName: "insert-image"
+                title: "Sacar evidencia de un ticket"
+                subtitle: "Capturas por tamaño de pantalla y llamadas a la API, en qas o en local, revisadas contigo antes de adjuntarlas a Jira."
+                onClicked: root.view = "evidencia"
+            }
+            ActionCard {
                 iconName: "view-list-details"
                 title: "Seguir con un ticket" + (root.observed ? "  (" + root.observed + " con review observado)" : "")
                 subtitle: "Tus tickets por fase, con lo que toca hacer en cada uno."
@@ -160,6 +176,55 @@ PlasmoidItem {
                 Step { number: 2; text: "Cuando Claude abra, pega esta frase:"; code: root.phraseNuevo
                     buttonText: "Copiar frase"; onCopy: root.copyText(root.phraseNuevo, "Frase copiada: pégala en Claude") }
                 Step { number: 3; text: "Qué pasará: Claude lee el ticket y sus comentarios, te muestra la carpeta de Obsidian antes de crearla, redacta el análisis (solo lectura), calcula el peso y arma el plan. Te pide OK en cada acción y se detiene en «OK, pasa a implementación»." }
+            }
+        }
+
+        // ================= EVIDENCIA =================
+        PlasmaComponents.ScrollView {
+            id: svEvidencia
+            visible: root.view === "evidencia"
+            Layout.fillWidth: true; Layout.fillHeight: true
+            clip: true
+            ColumnLayout {
+                width: svEvidencia.availableWidth - Kirigami.Units.largeSpacing
+                spacing: Kirigami.Units.largeSpacing
+                PlasmaComponents.Label { Layout.fillWidth: true; wrapMode: Text.Wrap; opacity: 0.75
+                    text: "Para dejar en el ticket la prueba de que el cambio funciona: un botón en móvil, una respuesta de la API, un 500 que ya no sale. Nada se publica sin tu OK." }
+                PlasmaComponents.TextField {
+                    Layout.fillWidth: true
+                    placeholderText: "Clave del ticket, por ejemplo ABC-123"
+                    text: root.evKey; onTextChanged: root.evKey = text
+                }
+                Flow {
+                    Layout.fillWidth: true; spacing: Kirigami.Units.smallSpacing
+                    visible: root.evCandidates.length > 0
+                    Repeater {
+                        model: root.evCandidates
+                        PlasmaComponents.Button {
+                            text: modelData.key + " · " + modelData.phaseName
+                            checkable: true; checked: root.evKey.trim().toUpperCase() === modelData.key
+                            onClicked: root.evKey = modelData.key
+                            PlasmaComponents.ToolTip { text: modelData.summary }
+                        }
+                    }
+                }
+                RowLayout {
+                    PlasmaComponents.Label { text: "Dónde:" }
+                    PlasmaComponents.RadioButton { text: "qas (para QA)"; checked: root.evEntorno === "qas"; onClicked: root.evEntorno = "qas" }
+                    PlasmaComponents.RadioButton { text: "local (antes del PR)"; checked: root.evEntorno === "local"; onClicked: root.evEntorno = "local" }
+                }
+                PlasmaComponents.TextField {
+                    Layout.fillWidth: true
+                    placeholderText: "Opcional: qué quieres mostrar (p. ej. el botón Pagar en móvil, que /offers ya no da 500)"
+                    text: root.evQue; onTextChanged: root.evQue = text
+                }
+                Step { number: 1; text: "Abre una terminal y pega este comando:"; code: "ticket --agent evidencia"
+                    buttonText: "Copiar comando"; onCopy: root.copyText("ticket --agent evidencia", "Comando copiado: pégalo en la terminal") }
+                Step { number: 2; text: "Cuando Claude abra, pega esta frase:"; code: root.phraseEvidencia
+                    buttonText: "Copiar frase"; onCopy: root.copyText(root.phraseEvidencia, "Frase copiada: pégala en Claude") }
+                Step { number: 3; text: root.evEntorno === "qas"
+                    ? "Qué pasará: Claude comprueba que el cambio esté desplegado en qas y te propone qué capturar por criterio. Para entrar a qas te abre una ventana donde inicias sesión tú (no ve tu clave). Captura, te muestra cada imagen con los datos personales tapados y, con tu OK, adjunta y comenta en Jira."
+                    : "Qué pasará: Claude levanta el worktree con una base propia sin datos reales y un usuario de prueba, captura (si quieres, antes y después del cambio) y te muestra cada imagen. Lo local sirve para el PR; lo que valida QA es qas." }
             }
         }
 

@@ -249,11 +249,13 @@ def classify(t, prs, extra, mine):
         phase = 5
         if estado == "validacion-dev":
             detail = "validación propia en qas"
-            phrase = (f"Retomamos {key}: lo valido yo (pruebas.md §8). Comprueba que el deploy de qas esté en verde, verifica cada caso de «Cómo probarlo» "
-                      "en qas, redacta la evidencia sin valores sensibles en jira-borrador.md y propón la transición; nada se publica sin mi OK.")
+            phrase = (f"Saca la evidencia de {key} en qas: lo valido yo (pruebas.md §8). Comprueba que el deploy de qas esté en verde, "
+                      "propón el plan de evidencia por criterio, captura, revísala conmigo y luego (cada paso con mi OK) adjunta, comenta "
+                      "y propón READY TO DEPLOY.")
         else:
             detail = "esperando QA"
-            phrase = f"Retomamos {key} en QA: compara lo probado con los criterios de aceptación, la matriz de pruebas y dime qué falta verificar en qas."
+            phrase = (f"Saca la evidencia de {key} en qas para QA: lee criterios y pruebas.md §8, comprueba el deploy de qas, propón el plan "
+                      "de evidencia, captura, revísala conmigo y, con mi OK, adjúntala y deja el comentario «Cómo probar» para QA.")
     elif my_prs or "review" in status or (estado == "aprobado" and folder.is_dir()):
         phase = 4
         if my_prs:
@@ -299,7 +301,7 @@ def classify(t, prs, extra, mine):
                   "(vista previa primero), completa el snapshot de Jira y redacta analisis.md en solo lectura.")
     if phase in (1, 2, 5, 6, 7):
         # Fases 1 y 6 (y 2 con el plan listo) abren el agente especializado (`ticket` pasa sus argumentos a claude).
-        agent = agent or {1: "ticket --agent nuevo-ticket", 6: "ticket --agent pase"}.get(phase, "ticket")
+        agent = agent or {1: "ticket --agent nuevo-ticket", 5: "ticket --agent evidencia", 6: "ticket --agent pase"}.get(phase, "ticket")
         cmds = [{"label": "meta-harness", "cmd": agent}]
     nxt = {1: "Empezar el análisis", 2: "Terminar el análisis y el plan", 3: "Seguir con la implementación",
            4: "Ver el review y el CI", 5: "Verificar en qas", 6: "Revisar el pase", 7: "Ver si ya se puede cerrar"}[phase]
@@ -310,7 +312,9 @@ def classify(t, prs, extra, mine):
     elif phase == 2 and "plan listo" in detail:
         nxt = "Preparar el entorno"
     elif phase == 5 and estado == "validacion-dev":
-        nxt = "Validar yo en qas"
+        nxt = "Validar yo en qas y dejar la evidencia"
+    elif phase == 5:
+        nxt = "Dejar la evidencia para QA"
     elif phase == 6 and t["type"] != "Pase a producción" and not t["prd"]:
         nxt = "Pedir el pase a producción"
     # Avisos: bitácora bloqueada o que no coincide con lo observado, y snapshot de Jira sin verificar o viejo.
