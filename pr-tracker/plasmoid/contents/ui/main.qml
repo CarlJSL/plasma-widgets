@@ -382,6 +382,7 @@ PlasmoidItem {
                             id: reportsMenu
                             y: parent.height
                             QQC.MenuItem { text: "Estado de code review (para el TL)"; onTriggered: root.copyReport("revisiones") }
+                            QQC.MenuItem { text: "Estado de mis tickets (para el TL)"; onTriggered: root.copyReport("tickets") }
                         }
                     }
                     PlasmaComponents.Button {

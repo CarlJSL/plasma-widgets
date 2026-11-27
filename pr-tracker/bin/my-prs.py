@@ -782,15 +782,59 @@ def report_reviews(data, cfg, ahora=None):
     if n == 0: out.append("\nNo queda nada pendiente.")
     return "\n".join(out)
 
+_ORDEN_ETAPA = {4: 0, 3: 1, 2: 2, 1: 3, 5: 4, 9: 5}
+
+def report_tickets(tickets, prs, merged, cfg, ahora=None):
+    """«Estado de mis tickets» para el TL: resumen por estado de Jira y, por ticket, sus PRs (mergeados o abiertos con su situación)."""
+    tl = cfg.get("tlLogin", "")
+    names = cfg.get("people", {})
+    tl_n = names.get(tl) or tl or "TL"
+    hoy = (ahora or datetime.now()).astimezone()
+    por_ticket = {}
+    for p in merged:
+        k = ticket_of({"title": p["title"], "branch": ""})
+        if k: por_ticket.setdefault(k, {})[(p["repo"], p["number"])] = f"{p['repo']}#{p['number']}"
+    for p in prs:
+        k = ticket_of(p)
+        if not k: continue
+        pend = [names.get(x) or x for x in p.get("requested", []) if x and x != p.get("author")]
+        nota = p.get("label", "")
+        if p.get("status") == "review" and pend: nota += " de " + " y ".join(pend)
+        por_ticket.setdefault(k, {})[(p["repo"], p["number"])] = f"{p['repo']}#{p['number']} ({nota.lower()})" if nota else f"{p['repo']}#{p['number']}"
+    grupos = {}
+    for t in tickets:
+        # los tableros nombran distinto lo mismo: se agrupa «en curso» y «por hacer»
+        g = {1: "IN PROGRESS", 9: "TO DO / BACKLOG"}.get(t["stage"], t["status"])
+        grupos.setdefault(g, []).append(t)
+    orden = sorted(grupos, key=lambda s: (_ORDEN_ETAPA.get(grupos[s][0]["stage"], 9), s))
+    out = [f"@{tl_n}, te comparto el estado actualizado de mis tickets al {hoy.day}-{_MESES[hoy.month - 1][:3]}.",
+           "", "RESUMEN GENERAL", "", f"Tengo {len(tickets)} tickets abiertos:", ""]
+    out += [f"• {len(grupos[s])} en {s.upper()}" for s in orden]
+    for n, s in enumerate(orden, 1):
+        out += ["", f"{n}. {s.upper()} ({len(grupos[s])})", ""]
+        for t in grupos[s]:
+            prs_t = ", ".join(por_ticket.get(t["key"], {}).values())
+            out.append(f"• {t['key']} ({t['summary']})" + (f": {prs_t}" if prs_t else ""))
+    return "\n".join(out)
+
 def report_cmd(args):
     """report TIPO: imprime el reporte (hoy: «revisiones»), con datos frescos de GitHub."""
     kind = args[0] if args else "revisiones"
     cfg = load(CONFIG, {})
+    if kind not in ("revisiones", "tickets"): print("Reporte desconocido: " + kind); sys.exit(1)
     raw = subprocess.run([sys.executable, os.path.abspath(__file__)], capture_output=True, text=True, timeout=180).stdout
     data = json.loads(raw)
     if data.get("error"): print("Error: " + str(data["error"])[:200]); sys.exit(1)
-    if kind != "revisiones": print("Reporte desconocido: " + kind); sys.exit(1)
-    print(report_reviews(data, cfg))
+    if kind == "revisiones":
+        print(report_reviews(data, cfg)); return
+    here = os.path.dirname(os.path.abspath(__file__))
+    script = next((os.path.join(here, n) for n in ("my-tickets", "my-tickets.py") if os.path.exists(os.path.join(here, n))), None)
+    if not script: print("Error: no encuentro my-tickets"); sys.exit(1)
+    tj = json.loads(subprocess.run([sys.executable, script], capture_output=True, text=True, timeout=120).stdout)
+    if tj.get("error"): print("Error: " + str(tj["error"])[:200]); sys.exit(1)
+    q = subprocess.run(["gh", "search", "prs", "--author", "@me", "--merged", "--limit", "300", "--json", "repository,number,title"], capture_output=True, text=True, timeout=60).stdout
+    merged = [{"repo": x["repository"]["name"], "number": x["number"], "title": x["title"]} for x in json.loads(q or "[]")]
+    print(report_tickets(tj["tickets"], data.get("prs", []), merged, cfg))
 
 
 def main():
