@@ -817,16 +817,47 @@ def report_tickets(tickets, prs, merged, cfg, ahora=None):
             out.append(f"• {t['key']} ({t['summary']})" + (f": {prs_t}" if prs_t else ""))
     return "\n".join(out)
 
+def report_tickets_review(prs, cfg, ahora=None):
+    """Tickets con PRs que esperan review o re-review, por persona y en orden (compañero primero, TL al final). Para pedir review."""
+    tl, peer = cfg.get("tlLogin", ""), cfg.get("peerLogin", "")
+    names = cfg.get("people", {})
+    tl_n, peer_n = names.get(tl) or tl or "el TL", names.get(peer) or peer or "el compañero"
+    secs = {"peer_sin": {}, "peer_re": {}, "tl": {}}
+    for p in prs:
+        if p.get("status") in ("draft", "observado", "conflicto", "ci"): continue
+        rt = _review_de(p, tl) if tl else None
+        if rt and rt["current"] and rt["state"] in ("APPROVED", "CHANGES_REQUESTED"): continue
+        rp = _review_de(p, peer) if peer else next((r for r in p.get("reviews", []) if r["login"] != tl and r["login"] != p["account"]), None)
+        if not rp or rp["state"] == "DISMISSED": k = "peer_sin"
+        elif not rp["current"]: k = "peer_re"
+        elif rp["state"] == "CHANGES_REQUESTED": continue
+        else: k = "tl"
+        t = ticket_of(p) or "Sin ticket"
+        secs[k].setdefault(t, {"titulo": p["title"], "prs": []})["prs"].append(f"{p['repo']}#{p['number']}: {p['url']}")
+    def desc(t, d):
+        m = re.match(r"^\s*\w+(?:\([^)]*\))?!?:\s*(.+)$", d["titulo"])
+        return f"- {t} ({m.group(1) if m else d['titulo']}): " + ", ".join(d["prs"])
+    out = ["Buenas, estos son mis tickets que esperan review:"]
+    n = 0
+    for k, titulo in (("peer_sin", f"Falta review de {peer_n}"), ("peer_re", f"Falta re-review de {peer_n} (subí cambios después de su review)"), ("tl", f"Falta review de {tl_n} (ya pasó por {peer_n})")):
+        if not secs[k]: continue
+        n += 1
+        out += ["", f"{n}. {titulo}", ""] + [desc(t, d) for t, d in secs[k].items()]
+    if n == 0: out.append("\nNo queda ninguno pendiente.")
+    return "\n".join(out)
+
 def report_cmd(args):
     """report TIPO: imprime el reporte (hoy: «revisiones»), con datos frescos de GitHub."""
     kind = args[0] if args else "revisiones"
     cfg = load(CONFIG, {})
-    if kind not in ("revisiones", "tickets"): print("Reporte desconocido: " + kind); sys.exit(1)
+    if kind not in ("revisiones", "tickets", "tickets-review"): print("Reporte desconocido: " + kind); sys.exit(1)
     raw = subprocess.run([sys.executable, os.path.abspath(__file__)], capture_output=True, text=True, timeout=180).stdout
     data = json.loads(raw)
     if data.get("error"): print("Error: " + str(data["error"])[:200]); sys.exit(1)
     if kind == "revisiones":
         print(report_reviews(data, cfg)); return
+    if kind == "tickets-review":
+        print(report_tickets_review(data.get("prs", []), cfg)); return
     here = os.path.dirname(os.path.abspath(__file__))
     script = next((os.path.join(here, n) for n in ("my-tickets", "my-tickets.py") if os.path.exists(os.path.join(here, n))), None)
     if not script: print("Error: no encuentro my-tickets"); sys.exit(1)
