@@ -846,16 +846,39 @@ def report_tickets_review(prs, cfg, ahora=None):
     if n == 0: out.append("\nNo queda ninguno pendiente.")
     return "\n".join(out)
 
+def report_revisados(reviewed, cfg, ahora=None, horas=24):
+    """Los PRs que revisé en las últimas `horas`: cuáles aprobé y en cuáles pedí cambios, con su link."""
+    ahora = (ahora or datetime.now()).astimezone()
+    tl = cfg.get("tlLogin", "")
+    names = cfg.get("people", {})
+    grupos = {"APPROVED": [], "CHANGES_REQUESTED": [], "COMMENTED": []}
+    for p in sorted(reviewed, key=lambda x: x.get("reviewedAt") or ""):
+        at = p.get("reviewedAt")
+        if not at or p.get("myState") not in grupos: continue
+        if (ahora - datetime.fromisoformat(at.replace("Z", "+00:00")).astimezone()).total_seconds() > horas * 3600: continue
+        aut = names.get(p.get("author")) or p.get("author", "")
+        grupos[p["myState"]].append(_linea(p, f"De {aut}, {_cuando(at, ahora)}" if aut else _cuando(at, ahora)))
+    out = [f"Buenas, esto es lo que revisé en las últimas {horas} horas:"]
+    n = 0
+    for k, t in (("APPROVED", "Aprobé estos"), ("CHANGES_REQUESTED", "Pedí cambios en estos"), ("COMMENTED", "Solo dejé comentarios en estos")):
+        if not grupos[k]: continue
+        n += 1
+        out += ["", f"{n}. {t}", ""] + grupos[k]
+    if n == 0: out.append("\nNo revisé ningún PR en ese tiempo.")
+    return "\n".join(out)
+
 def report_cmd(args):
     """report TIPO: imprime el reporte (hoy: «revisiones»), con datos frescos de GitHub."""
     kind = args[0] if args else "revisiones"
     cfg = load(CONFIG, {})
-    if kind not in ("revisiones", "tickets", "tickets-review"): print("Reporte desconocido: " + kind); sys.exit(1)
+    if kind not in ("revisiones", "tickets", "tickets-review", "revisados"): print("Reporte desconocido: " + kind); sys.exit(1)
     raw = subprocess.run([sys.executable, os.path.abspath(__file__)], capture_output=True, text=True, timeout=180).stdout
     data = json.loads(raw)
     if data.get("error"): print("Error: " + str(data["error"])[:200]); sys.exit(1)
     if kind == "revisiones":
         print(report_reviews(data, cfg)); return
+    if kind == "revisados":
+        print(report_revisados(data.get("reviewed", []), cfg)); return
     if kind == "tickets-review":
         print(report_tickets_review(data.get("prs", []), cfg)); return
     here = os.path.dirname(os.path.abspath(__file__))

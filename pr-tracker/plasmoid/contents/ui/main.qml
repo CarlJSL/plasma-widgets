@@ -384,6 +384,7 @@ PlasmoidItem {
                             QQC.MenuItem { text: "Estado de code review (para el TL)"; onTriggered: root.copyReport("revisiones") }
                             QQC.MenuItem { text: "Estado de mis tickets (para el TL)"; onTriggered: root.copyReport("tickets") }
                             QQC.MenuItem { text: "Tickets que esperan review o re-review"; onTriggered: root.copyReport("tickets-review") }
+                            QQC.MenuItem { text: "PRs que revisé en las últimas 24 h"; onTriggered: root.copyReport("revisados") }
                         }
                     }
                     PlasmaComponents.Button {
