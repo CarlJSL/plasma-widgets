@@ -15,6 +15,7 @@ Jira (sitio y credenciales): se toman de ~/.config/pr-tracker/config.json, igual
 """
 import base64, json, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from urllib import request as urlrequest
 
@@ -38,6 +39,52 @@ WT_RE = re.compile(r"^(.*?)-((?:" + KEYS + r")-.+)$")
 KEY_RE = re.compile(r"\b(?:" + KEYS + r")-\d+\b")
 
 PHASES = {1: "Nuevo", 2: "Análisis y plan", 3: "Implementación", 4: "Review", 5: "QA", 6: "Pase a producción", 7: "Cierre"}
+# `estado_trabajo` del encabezado de bitacora.md (valores cerrados de la plantilla del meta-harness) -> fase esperada.
+ESTADOS = {"analisis": 2, "plan-abierto": 2, "plan-listo": 2, "implementacion": 3, "review": 4, "observado": 4,
+           "aprobado": 4, "validacion-dev": 5, "qa": 5, "pase": 6, "cerrado": 7, "bloqueado": None, "descartado": 7}
+FECHA_RE = re.compile(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?\s*([+-]\d{2}:?\d{2}|Z)?")
+
+
+def front(path):
+    """Claves `clave: valor` del encabezado YAML de un .md (sin dependencias; ignora comentarios)."""
+    try:
+        text = path.read_text(errors="ignore")
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    out = {}
+    for line in text.split("\n")[1:]:
+        if line.strip() == "---":
+            break
+        if line.lstrip().startswith("#") or ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        out[k.strip()] = v.strip().strip("'\"")
+    return out
+
+
+def to_local(text):
+    """Primera fecha con hora del texto, en hora local sin zona; None si no hay."""
+    m = FECHA_RE.search(text or "")
+    if not m:
+        return None
+    tz = (m.group(3) or "").replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(f"{m.group(1)}T{m.group(2)}{tz}")
+    except ValueError:
+        return None
+    return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
+
+
+def snapshot_state(folder, jira_updated):
+    """'pendiente' si el README nunca se verificó contra Jira, 'viejo' si Jira cambió después, '' si está al día."""
+    snap = front(folder / "README.md").get("jira_actualizado", "")
+    local = to_local(snap)
+    if not local:
+        return "pendiente"
+    remote = to_local(jira_updated)
+    return "viejo" if remote and (remote - local).total_seconds() > 60 else ""
 
 
 def jira_auth():
@@ -175,7 +222,9 @@ def classify(t, prs, extra, mine):
     wts = worktrees_of(key, folder_text, extra)
     my_prs = [p for p in prs if pr_matches(p, key, mine, "review" in t["status"].lower())]
     status = t["status"].lower()
-    meta = ["ticket"]  # comando para el meta-harness
+    front_bit = front(folder / "bitacora.md")
+    estado = front_bit.get("estado_trabajo", "")
+    agent = None
     cmds, detail = [{"label": "meta-harness", "cmd": "ticket"}], ""
     code_cmds = wts or cmds
 
@@ -196,22 +245,34 @@ def classify(t, prs, extra, mine):
             detail = "sin pase PRD vinculado"
             phrase = (f"Arma el pase a prod de {key}. Revisa {RELEASE}, "
                       "muéstrame el borrador y espera mi OK antes de crear nada en Jira o Slack.")
-    elif "qa" in status.replace("code", ""):
-        phase, detail = 5, "esperando QA"
-        phrase = f"Retomamos {key} en QA: compara lo probado con los criterios de aceptación, la matriz de pruebas y dime qué falta verificar en qas."
-    elif my_prs or "review" in status:
+    elif "qa" in status.replace("code", "") or (estado == "validacion-dev" and not my_prs):
+        phase = 5
+        if estado == "validacion-dev":
+            detail = "validación propia en qas"
+            phrase = (f"Retomamos {key}: lo valido yo (pruebas.md §8). Comprueba que el deploy de qas esté en verde, verifica cada caso de «Cómo probarlo» "
+                      "en qas, redacta la evidencia sin valores sensibles en jira-borrador.md y propón la transición; nada se publica sin mi OK.")
+        else:
+            detail = "esperando QA"
+            phrase = f"Retomamos {key} en QA: compara lo probado con los criterios de aceptación, la matriz de pruebas y dime qué falta verificar en qas."
+    elif my_prs or "review" in status or (estado == "aprobado" and folder.is_dir()):
         phase = 4
         if my_prs:
             p = my_prs[0]
-            estado = {"CHANGES_REQUESTED": "observado", "APPROVED": "aprobado"}.get(p["decision"], "esperando review")
+            pr_estado = {"CHANGES_REQUESTED": "observado", "APPROVED": "aprobado"}.get(p["decision"], "esperando review")
             if p["draft"]:
-                estado = "borrador"
-            detail = f"#{p['number']} {p['repo']} · {estado}" + (f" (+{len(my_prs) - 1} PR más)" if len(my_prs) > 1 else "")
-            if estado == "observado":
+                pr_estado = "borrador"
+            detail = f"#{p['number']} {p['repo']} · {pr_estado}" + (f" (+{len(my_prs) - 1} PR más)" if len(my_prs) > 1 else "")
+            if pr_estado == "observado":
                 phrase = (f"Observado en #{p['number']} ({p['repo']}): lee el review completo, aplica las correcciones en este worktree con tests y volumen medidos, "
-                          f"{AUDIT}, y pídeme OK antes del push.")
+                          f"{AUDIT}, y pídeme OK antes del push. Después (cada paso con OK): actualiza la descripción del PR si cambió, "
+                          "responde en el PR, pasa el ticket a Code review y registra todo en la bitácora.")
+            elif pr_estado == "aprobado":
+                phrase = post_merge_phrase(key, f"#{p['number']} ({p['repo']})")
             else:
                 phrase = f"Retomamos {key}: revisa #{p['number']} ({p['repo']}) — review, CI, conflictos con qas — y dime qué sigue."
+        elif estado == "aprobado":
+            detail = "aprobado; falta merge, deploy de qas y validación"
+            phrase = post_merge_phrase(key, "su PR")
         else:
             detail = "en CODE REVIEW (sin PR detectado)"
             phrase = f"Retomamos {key}: ubica su PR, revisa review y CI, y dime qué sigue."
@@ -220,29 +281,58 @@ def classify(t, prs, extra, mine):
         phase, cmds = 3, wts
         detail = "worktree sin PR" + (f" ({len(wts)} repos)" if len(wts) > 1 else "")
         phrase = f"Retomamos {key}: lee README, bitácora y punto de reanudación, compáralo con el estado del worktree y dime qué sigue."
-    elif folder.is_dir() and filled(folder, "plan"):
-        phase, detail = 2, "plan listo; falta pasar a implementación"
-        phrase = f"El plan de {key} está listo. Si estoy de acuerdo: OK, pasa a implementación; crea el worktree de cada repo desde origin/qas y dime el comando wt."
+    elif folder.is_dir() and (estado == "plan-listo" or (estado not in ESTADOS and filled(folder, "plan"))):
+        phase, detail, agent = 2, "plan listo; falta preparar el entorno", "ticket --agent nuevo-ticket"
+        phrase = (f"Retoma {key}: el plan está listo. Comprueba que no quedan decisiones abiertas que cambien repos o alcance y, si es así, "
+                  "prepara el entorno (paso 7): worktree por repo desde origin/qas, integrar-proyecto y npm ci --ignore-scripts. "
+                  "Muéstrame los comandos y espera mi OK.")
     elif folder.is_dir():
         phase = 2
-        detail = "análisis hecho; falta el plan" if filled(folder, "analisis") else "carpeta creada; falta el análisis"
+        if estado == "plan-abierto":
+            detail = "plan con decisiones abiertas"
+        elif estado == "analisis" or estado not in ESTADOS:
+            detail = "análisis hecho; falta el plan" if filled(folder, "analisis") else "carpeta creada; falta el análisis"
         phrase = f"Retomamos {key}: lee README y bitácora, continúa el análisis o el plan en solo lectura y dime qué decisiones faltan."
     else:
         phase, detail = 1, "sin carpeta en Obsidian"
         phrase = (f"Nuevo ticket {key}. Léelo por MCP con descripción, criterios y todos los comentarios. Crea su carpeta en Obsidian "
                   "(vista previa primero), completa el snapshot de Jira y redacta analisis.md en solo lectura.")
     if phase in (1, 2, 5, 6, 7):
-        # Fases 1 y 6 abren el agente especializado (`ticket` pasa sus argumentos a claude).
-        agent = {1: "ticket --agent nuevo-ticket", 6: "ticket --agent pase"}.get(phase, "ticket")
+        # Fases 1 y 6 (y 2 con el plan listo) abren el agente especializado (`ticket` pasa sus argumentos a claude).
+        agent = agent or {1: "ticket --agent nuevo-ticket", 6: "ticket --agent pase"}.get(phase, "ticket")
         cmds = [{"label": "meta-harness", "cmd": agent}]
     nxt = {1: "Empezar el análisis", 2: "Terminar el análisis y el plan", 3: "Seguir con la implementación",
            4: "Ver el review y el CI", 5: "Verificar en qas", 6: "Revisar el pase", 7: "Ver si ya se puede cerrar"}[phase]
     if phase == 4 and "observado" in detail:
         nxt = "Aplicar las correcciones del review"
+    elif phase == 4 and "aprobado" in detail:
+        nxt = "Merge, deploy de qas y validación"
+    elif phase == 2 and "plan listo" in detail:
+        nxt = "Preparar el entorno"
+    elif phase == 5 and estado == "validacion-dev":
+        nxt = "Validar yo en qas"
     elif phase == 6 and t["type"] != "Pase a producción" and not t["prd"]:
         nxt = "Pedir el pase a producción"
+    # Avisos: bitácora bloqueada o que no coincide con lo observado, y snapshot de Jira sin verificar o viejo.
+    avisos = []
+    if estado == "bloqueado":
+        avisos.append("bloqueado" + (f": {front_bit.get('detalle')}" if front_bit.get("detalle") else ""))
+    elif estado in ESTADOS and ESTADOS[estado] and ESTADOS[estado] != phase and t["type"] != "Pase a producción":
+        avisos.append(f"bitácora dice «{estado}»")
+    snap = snapshot_state(folder, t["updated"]) if folder.is_dir() else ""
+    if snap:
+        avisos.append("snapshot sin verificar" if snap == "pendiente" else "snapshot viejo")
+    if avisos:
+        detail = (detail + " · " if detail else "") + " · ".join(avisos)
     t.update({"next": nxt, "phase": phase, "phaseName": PHASES[phase], "detail": detail, "launch": {"cmds": cmds, "phrase": phrase},
+              "estado": estado, "snapshot": snap,
               "prs": [{"number": p["number"], "repo": p["repo"], "url": p["url"], "decision": p["decision"]} for p in my_prs]})
+
+
+def post_merge_phrase(key, pr):
+    return (f"{key}: {pr} está aprobado. Sigue el paso «Aprobado» de AGENTS.md: recuérdame hacer yo el merge a qas (merge commit), "
+            "comprueba el deploy de qas en verde, decide con pruebas.md §8 si va a QA (invio-qa-ticket) o lo valido yo, compara el peso "
+            "estimado con el diff mergeado y propón la transición. Actualiza estado_trabajo y el punto de reanudación; nada se publica sin mi OK.")
 
 
 def main():
